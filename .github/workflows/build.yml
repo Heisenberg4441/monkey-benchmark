@@ -29,7 +29,9 @@ jobs:
             bin_path: build/monkey_bench
             cuda: false
             cmake_cuda: '-DUSE_CUDA=OFF'
-          - os: windows-latest
+          # windows-2022 (VS2022): CUDA 12.8 поддерживает MSVC только до VS2022;
+          # на windows-latest (VS2026) nvcc отказывается компилировать.
+          - os: windows-2022
             artifact_name: monkey_bench_windows_x86_64.exe
             bin_path: build/monkey_bench.exe
             cuda: true
