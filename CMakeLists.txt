@@ -47,6 +47,13 @@ else()
     target_link_libraries(monkey_bench PRIVATE Threads::Threads)
 endif()
 
+# MSVC иначе перекодирует UTF-8 литералы в системную кодовую страницу (cp1251),
+# из-за чего русский вывод превращается в кракозябры. /utf-8 фиксит источник и
+# исполнение в UTF-8.
+if(MSVC)
+    target_compile_options(monkey_bench PRIVATE /utf-8)
+endif()
+
 # -march=native только для нативных (не кросс, не релизных) сборок CPU.
 if(NATIVE_ARCH)
     include(CheckCXXCompilerFlag)

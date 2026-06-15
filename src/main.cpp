@@ -11,6 +11,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace monkey {
 
 std::vector<std::string> split_utf8(const std::string& str) {
@@ -221,4 +225,10 @@ int run(int argc, char** argv) {
 
 } // namespace monkey
 
-int main(int argc, char** argv) { return monkey::run(argc, argv); }
+int main(int argc, char** argv) {
+#ifdef _WIN32
+    // Вывод в UTF-8 без необходимости вручную делать `chcp 65001`.
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+    return monkey::run(argc, argv);
+}
