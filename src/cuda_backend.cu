@@ -85,10 +85,14 @@ bool cuda_available() {
 }
 
 void run_cuda(const Config& cfg, Control& ctrl) {
-    if (cfg.len > kMaxLen) {
+    // Лимит длины актуален только для brute (ядро держит комбинацию в
+    // локальном массиве). random-ядро сравнивает с эталоном в глобальной
+    // памяти и не ограничено длиной.
+    if (cfg.mode == Mode::Brute && cfg.len > kMaxLen) {
         std::fprintf(stderr,
-                     "[cuda] длина эталона %d превышает лимит GPU-бэкенда (%d)\n",
-                     cfg.len, kMaxLen);
+                     "[cuda] brute на GPU ограничен длиной %d (эталон %d); "
+                     "используйте random или CPU\n",
+                     kMaxLen, cfg.len);
         return;
     }
 
