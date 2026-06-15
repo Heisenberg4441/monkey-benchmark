@@ -22,9 +22,6 @@ jobs:
           - os: macos-14 # Это раннеры на Apple Silicon (M1)
             artifact_name: monkey_benchmark_macos_arm64
             build_cmd: clang++ -O3 -march=armv8.5-a -std=c++17 -pthread monkey_benchmark.cpp -o monkey_benchmark_macos_arm64
-          - os: macos-12 # Это раннеры на Intel
-            artifact_name: monkey_benchmark_macos_x86_64
-            build_cmd: clang++ -O3 -march=x86-64 -std=c++17 -pthread monkey_benchmark.cpp -o monkey_benchmark_macos_x86_64
           - os: windows-latest
             artifact_name: monkey_benchmark_windows_x86_64.exe
             build_cmd: cl /O2 /arch:AVX2 /std:c++17 monkey_benchmark.cpp
