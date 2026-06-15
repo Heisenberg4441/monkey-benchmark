@@ -17,29 +17,32 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: monkey_benchmark_linux_x86_64
-            build_cmd: g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -pthread monkey_benchmark.cpp -o monkey_benchmark_linux_x86_64
+            artifact_name: monkey_bench_linux_x86_64
+            bin_path: build/monkey_bench
+            cmake_extra: -DCMAKE_EXE_LINKER_FLAGS=-static
           - os: macos-14 # Это раннеры на Apple Silicon (M1)
-            artifact_name: monkey_benchmark_macos_arm64
-            build_cmd: clang++ -O3 -march=armv8.5-a -std=c++17 -pthread monkey_benchmark.cpp -o monkey_benchmark_macos_arm64
+            artifact_name: monkey_bench_macos_arm64
+            bin_path: build/monkey_bench
+            cmake_extra: ""
           - os: windows-latest
-            artifact_name: monkey_benchmark_windows_x86_64.exe
-            build_cmd: cl /O2 /arch:AVX2 /std:c++17 monkey_benchmark.cpp
+            artifact_name: monkey_bench_windows_x86_64.exe
+            bin_path: build/Release/monkey_bench.exe
+            cmake_extra: ""
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup MSVC Developer Command Prompt (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+      # Релизные бинарники: без CUDA (нет GPU на раннерах) и без -march=native
+      # ради портируемости на любых машинах пользователей.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUSE_CUDA=OFF -DNATIVE_ARCH=OFF ${{ matrix.cmake_extra }}
 
       - name: Build
-        run: ${{ matrix.build_cmd }}
+        run: cmake --build build --config Release
 
-      - name: Rename Windows binary (if needed)
-        if: runner.os == 'Windows'
-        run: Rename-Item -Path monkey_benchmark.exe -NewName monkey_benchmark_windows_x86_64.exe
+      - name: Stage artifact
+        run: cmake -E copy ${{ matrix.bin_path }} ${{ matrix.artifact_name }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -65,11 +68,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ./binaries/monkey_benchmark_linux_x86_64/monkey_benchmark_linux_x86_64
-            ./binaries/monkey_benchmark_macos_arm64/monkey_benchmark_macos_arm64
-            ./binaries/monkey_benchmark_macos_x86_64/monkey_benchmark_macos_x86_64
-            ./binaries/monkey_benchmark_windows_x86_64.exe/monkey_benchmark_windows_x86_64.exe
+          files: ./binaries/**/*
+          fail_on_unmatched_files: true
           body: |
             🐒 Новая версия Infinite Monkey Benchmark!
             

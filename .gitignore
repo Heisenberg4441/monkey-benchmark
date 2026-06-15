@@ -1,2 +1,7 @@
+# Build
+/build/
 monkey_bench
+monkey_bench_cuda
+monkey_benchmark
 monkey_benchmark.exe
+*.o
