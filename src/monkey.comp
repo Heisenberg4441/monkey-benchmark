@@ -1,0 +1,62 @@
+#version 450
+
+// Compute-шейдер Vulkan-бэкенда. Логика и PRNG идентичны CPU/CUDA
+// (см. src/prng.h) — namely PCG-hash на 32 битах, без int64.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer TargetBuf { int target[]; };
+layout(std430, binding = 1) buffer FoundBuf { uint found; };
+
+layout(push_constant) uniform PC {
+    uint seed;
+    uint iters;
+    int  len;
+    int  n;
+    uint mode;   // 0 = random, 1 = brute
+    uint base;   // brute: стартовый глобальный индекс
+    uint total;  // brute: всего потоков (шаг перебора)
+} pc;
+
+uint pcg_hash(uint x) {
+    uint state = x * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28) + 4u)) ^ state) * 277803737u;
+    return (word >> 22) ^ word;
+}
+
+int rand_index(uint seed, uint key, uint pos, int n) {
+    uint r = pcg_hash(seed ^ pcg_hash(key + pos * 2654435761u));
+    return int(r % uint(n));
+}
+
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+
+    if (pc.mode == 0u) {
+        // random: свой поток случайных чисел на инвокацию
+        uint thread_seed = pc.seed + tid * 2654435761u;
+        for (uint k = 0u; k < pc.iters; ++k) {
+            if (found != 0u) break;
+            bool match = true;
+            for (int i = 0; i < pc.len; ++i) {
+                int c = rand_index(thread_seed, k, uint(i), pc.n);
+                if (c != target[i]) { match = false; break; }
+            }
+            if (match) atomicOr(found, 1u);
+        }
+    } else {
+        // brute: 32-битное пространство индексов (осмысленно для коротких строк)
+        for (uint step = 0u; step < pc.iters; ++step) {
+            if (found != 0u) break;
+            uint idx = pc.base + tid + step * pc.total;
+            bool match = true;
+            uint t = idx;
+            for (int i = pc.len - 1; i >= 0; --i) {
+                int digit = int(t % uint(pc.n));
+                t /= uint(pc.n);
+                if (digit != target[i]) match = false;
+            }
+            if (match) atomicOr(found, 1u);
+        }
+    }
+}

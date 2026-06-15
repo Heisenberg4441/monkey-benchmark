@@ -35,10 +35,14 @@ std::vector<std::string> split_utf8(const std::string& str) {
 
 namespace {
 
+// Какой GPU-API использовать. Auto: NVIDIA -> CUDA, иначе -> Vulkan.
+enum class GpuApi { Auto, Cuda, Vulkan };
+
 struct Args {
     std::string file;
     Mode mode = Mode::Random;
     Backend backend = Backend::Cpu;
+    GpuApi gpu_api = GpuApi::Auto;
     unsigned threads = 0;
     double duration = 0.0;
 };
@@ -51,6 +55,7 @@ void print_help(const char* prog) {
         "  -m, --mode <random|brute>     режим работы (default: random)\n"
         "  -b, --backend <cpu|gpu|all>   целевая нагрузка (default: cpu)\n"
         "      -cpu | -gpu | -all        короткие алиасы для --backend\n"
+        "      --gpu-api <auto|cuda|vulkan>  выбор GPU-API (default: auto)\n"
         "  -t, --threads <N>             число CPU-потоков (default: auto)\n"
         "  -d, --duration <sec>          остановиться через N секунд (бенчмарк)\n"
         "  -h, --help                    показать эту справку\n";
@@ -93,6 +98,14 @@ bool parse_args(int argc, char** argv, Args& args) {
             std::string v;
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
             if (!parse_backend(v, args.backend)) { std::cerr << "Неизвестный бэкенд: " << v << "\n"; return false; }
+        }
+        else if (key == "--gpu-api") {
+            std::string v;
+            if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
+            if (v == "auto") args.gpu_api = GpuApi::Auto;
+            else if (v == "cuda") args.gpu_api = GpuApi::Cuda;
+            else if (v == "vulkan") args.gpu_api = GpuApi::Vulkan;
+            else { std::cerr << "Неизвестный gpu-api: " << v << "\n"; return false; }
         }
         else if (key == "-t" || key == "--threads") {
             std::string v;
@@ -164,10 +177,23 @@ int run(int argc, char** argv) {
     // Разрешаем фактически используемые бэкенды с откатом на CPU.
     bool use_cpu = (cfg.backend == Backend::Cpu || cfg.backend == Backend::All);
     bool use_gpu = (cfg.backend == Backend::Gpu || cfg.backend == Backend::All);
-    if (use_gpu && !cuda_available()) {
-        std::cerr << "[warn] CUDA-бэкенд недоступен (нет GPU или сборка без CUDA), откат на CPU\n";
-        use_gpu = false;
-        use_cpu = true;
+
+    // Выбор GPU-API: NVIDIA -> CUDA, иначе -> Vulkan (любой GPU).
+    void (*gpu_fn)(const Config&, Control&) = nullptr;
+    const char* gpu_label = "";
+    if (use_gpu) {
+        bool want_cuda = (args.gpu_api == GpuApi::Auto || args.gpu_api == GpuApi::Cuda);
+        bool want_vulkan = (args.gpu_api == GpuApi::Auto || args.gpu_api == GpuApi::Vulkan);
+        if (want_cuda && cuda_available()) {
+            gpu_fn = run_cuda; gpu_label = "cuda";
+        } else if (want_vulkan && vulkan_available()) {
+            gpu_fn = run_vulkan; gpu_label = "vulkan";
+        }
+        if (!gpu_fn) {
+            std::cerr << "[warn] выбранный GPU-бэкенд недоступен, откат на CPU\n";
+            use_gpu = false;
+            use_cpu = true;
+        }
     }
 
     std::cout << "Эталон:           " << reference << "\n";
@@ -175,7 +201,8 @@ int run(int argc, char** argv) {
     std::cout << "Размер алфавита:  " << cfg.n << "\n";
     std::cout << "Режим:            " << mode_name(cfg.mode) << "\n";
     std::cout << "Бэкенд:           " << backend_name(cfg.backend)
-              << (use_cpu && use_gpu ? " (cpu+gpu)" : (use_gpu ? " (gpu)" : " (cpu)")) << "\n";
+              << (use_cpu && use_gpu ? std::string(" (cpu+") + gpu_label + ")"
+                                     : (use_gpu ? std::string(" (") + gpu_label + ")" : std::string(" (cpu)"))) << "\n";
     if (cfg.duration > 0) std::cout << "Лимит времени:    " << cfg.duration << " c\n";
     std::cout << "\n";
 
@@ -184,7 +211,7 @@ int run(int argc, char** argv) {
 
     std::thread cpu_thr, gpu_thr;
     if (use_cpu) cpu_thr = std::thread(run_cpu, std::cref(cfg), std::ref(ctrl));
-    if (use_gpu) gpu_thr = std::thread(run_cuda, std::cref(cfg), std::ref(ctrl));
+    if (use_gpu) gpu_thr = std::thread(gpu_fn, std::cref(cfg), std::ref(ctrl));
 
     // Репортер в главном потоке.
     while (!ctrl.stop.load(std::memory_order_acquire)) {

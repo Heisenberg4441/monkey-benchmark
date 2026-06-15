@@ -43,4 +43,9 @@ void run_cpu(const Config& cfg, Control& ctrl);
 bool cuda_available();
 void run_cuda(const Config& cfg, Control& ctrl);
 
+// Vulkan-бэкенд (любой GPU: AMD/Intel/Apple/NVIDIA). Реализация в
+// vulkan_backend.cpp (USE_VULKAN) либо заглушка в vulkan_stub.cpp.
+bool vulkan_available();
+void run_vulkan(const Config& cfg, Control& ctrl);
+
 } // namespace monkey
