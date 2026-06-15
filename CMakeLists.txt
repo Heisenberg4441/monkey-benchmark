@@ -53,9 +53,12 @@ endif()
 find_package(Vulkan)
 if(USE_VULKAN AND Vulkan_FOUND)
     # Компилятор GLSL->SPIR-V: предпочитаем glslangValidator, иначе glslc.
-    find_program(GLSL_COMPILER NAMES glslangValidator glslc
-                 HINTS ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE} ENV VULKAN_SDK
-                 PATH_SUFFIXES bin)
+    if(Vulkan_GLSLANG_VALIDATOR_EXECUTABLE)
+        set(GLSL_COMPILER ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
+    else()
+        find_program(GLSL_COMPILER NAMES glslangValidator glslc
+                     HINTS ENV VULKAN_SDK PATH_SUFFIXES bin Bin)
+    endif()
     if(GLSL_COMPILER)
         message(STATUS "Vulkan найден: GPU-бэкенд (любой GPU) включён")
         set(SPV_HEADER ${CMAKE_BINARY_DIR}/gen/monkey_comp_spv.h)
