@@ -7,135 +7,140 @@
   <img src="https://img.shields.io/badge/License-MIT-lightgrey.svg" />
 </p>
 
-Кроссплатформенный вычислительный бенчмарк, моделирующий теорему о бесконечных обезьянах. Программа генерирует случайные строки либо детерминированно перебирает пространство комбинаций до совпадения с эталонным текстом и измеряет пропускную способность системы в операциях в секунду (Ops/sec).
+<p align="center">
+  <b>English</b> · <a href="README.ru.md">Русский</a>
+</p>
 
-Бенчмарк предназначен для оценки производительности CPU и GPU на задаче с предсказуемой вычислительной сложностью, параметризованной размером алфавита и длиной строки. Это позволяет сравнивать архитектуры между собой и наблюдать масштабирование при изменении энтропии входных данных.
+A cross-platform compute benchmark built around the Infinite Monkey Theorem. The program either generates random strings or deterministically enumerates the combination space until it matches a reference text, measuring sustained throughput in operations per second (Ops/sec).
 
----
-
-## Содержание
-
-- [Теоретическая основа](#теоретическая-основа)
-- [Возможности](#возможности)
-- [Сборка](#сборка)
-  - [CPU-бэкенд](#cpu-бэкенд)
-  - [CUDA-бэкенд](#cuda-бэкенд)
-- [Использование](#использование)
-- [Методология бенчмарка локалей](#методология-бенчмарка-локалей)
-- [Архитектура](#архитектура)
-- [Ограничения](#ограничения)
-- [Лицензия](#лицензия)
+The benchmark is designed to evaluate CPU and GPU performance on a task with predictable, tunable computational complexity — parameterized by alphabet size and string length. This makes it straightforward to compare architectures and to observe how throughput scales as the entropy of the input changes.
 
 ---
 
-## Теоретическая основа
+## Table of Contents
 
-Согласно теореме о бесконечных обезьянах, случайная последовательность символов, генерируемая бесконечно долго, почти наверняка содержит любой заранее заданный конечный текст.
+- [Theory](#theory)
+- [Features](#features)
+- [Building](#building)
+  - [CPU Backend](#cpu-backend)
+  - [CUDA Backend](#cuda-backend)
+- [Usage](#usage)
+- [Locale Benchmark Methodology](#locale-benchmark-methodology)
+- [Architecture](#architecture)
+- [Vision & Roadmap](#vision--roadmap)
+- [Limitations](#limitations)
+- [License](#license)
 
-Вероятность того, что случайная строка длины `L` над алфавитом мощности `N` совпадёт с эталоном, равна:
+---
+
+## Theory
+
+According to the Infinite Monkey Theorem, a random sequence of characters generated for an unbounded amount of time will almost surely contain any given finite text.
+
+The probability that a random string of length `L` over an alphabet of cardinality `N` matches the reference is:
 
 $$P = \frac{1}{N^L}$$
 
-Математическое ожидание числа попыток до первого совпадения составляет `N^L`. Таким образом, размер алфавита и длина строки задают вычислительную сложность задачи, а измеряемая величина — это устойчивая скорость генерации и сравнения кандидатов на единицу времени.
+The expected number of attempts before the first match is `N^L`. Thus alphabet size and string length define the computational complexity of the task, while the measured quantity is the sustained rate at which candidates are generated and compared per unit of time.
 
-Бенчмарк фиксирует, как меняется пропускная способность в зависимости от мощности алфавита (локали) и характеристик символов (одно- или многобайтовые), что отражает поведение памяти и арифметики целевой платформы под нагрузкой.
-
----
-
-## Возможности
-
-- **Два режима работы**
-  - `random` — метод Монте-Карло. Каждый поток независимо генерирует случайные строки. Нет синхронизации состояния между потоками и нулевой оверхед на координацию.
-  - `brute` — детерминированный перебор. Пространство комбинаций интерпретируется как число в системе счисления с основанием `N`; потоки делят его на непересекающиеся диапазоны и гарантированно покрывают всё пространство без повторов.
-- **Минимизация аллокаций в горячем цикле.** Рабочие буферы выделяются один раз на поток до входа в цикл; внутри цикла память только перезаписывается.
-- **Поддержка UTF-8.** Обработка ведётся на уровне Unicode-символов, а не байтов: латиница, кириллица, иероглифы и эмодзи корректно разбираются и сравниваются.
-- **Динамическое построение алфавита.** Алфавит извлекается из уникальных символов эталонного файла, что делает тривиальной подготовку сценариев для разных локалей.
-- **Гетерогенные бэкенды.** Единое ядро на C++17 для CPU (x86_64 с AVX2/AVX-512, ARM64 с NEON) и бэкенд на CUDA для массивно-параллельного исполнения на GPU NVIDIA.
+The benchmark captures how throughput varies with alphabet cardinality (locale) and character properties (single- vs. multi-byte), reflecting the memory and arithmetic behavior of the target platform under load.
 
 ---
 
-## Сборка
+## Features
 
-Проект собирается через CMake. CUDA-бэкенд включается автоматически, если в системе обнаружен CUDA Toolkit; иначе собирается только CPU-вариант.
+- **Two operating modes**
+  - `random` — Monte Carlo. Each thread independently generates random strings. No shared state between threads and zero coordination overhead.
+  - `brute` — deterministic enumeration. The combination space is treated as a number in base `N`; threads split it into disjoint ranges and are guaranteed to cover the entire space without repeats.
+- **Minimal hot-loop allocations.** Working buffers are allocated once per thread before the loop; inside the loop memory is only overwritten.
+- **UTF-8 support.** Processing happens at the level of Unicode characters rather than bytes: Latin, Cyrillic, CJK ideographs, and emoji are parsed and compared correctly.
+- **Dynamic alphabet construction.** The alphabet is derived from the unique characters of the reference file, which makes preparing different-locale scenarios trivial.
+- **Heterogeneous backends.** A single C++17 core for CPU (x86_64 with AVX2/AVX-512, ARM64 with NEON) and a CUDA backend for massively parallel execution on NVIDIA GPUs.
+
+---
+
+## Building
+
+The project builds with CMake. The CUDA backend is enabled automatically if a CUDA Toolkit is detected; otherwise only the CPU variant is built.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Итоговый бинарник: `build/monkey_bench`.
+Resulting binary: `build/monkey_bench`.
 
-### CPU-бэкенд
+### CPU Backend
 
-CPU-вариант не требует дополнительных зависимостей. CMake включает оптимизацию `-O3` и `-march=native` (если поддерживается компилятором) автоматически, поэтому отдельных команд под Clang/GCC/MSVC не требуется.
+The CPU variant has no extra dependencies. CMake enables `-O3` and `-march=native` (when the compiler supports it) automatically, so no separate Clang/GCC/MSVC commands are required.
 
-### CUDA-бэкенд
+### CUDA Backend
 
-Бенчмарк поддерживает исполнение на GPU NVIDIA через CUDA. Каждый кандидат отображается на отдельный поток CUDA, что обеспечивает массивный параллелизм в режиме `random` и плотное покрытие пространства комбинаций в режиме `brute`.
+The benchmark supports execution on NVIDIA GPUs via CUDA. Each candidate maps to a single CUDA thread, providing massive parallelism in `random` mode and dense coverage of the combination space in `brute` mode.
 
-Требования:
+Requirements:
 
-- CUDA Toolkit 11.0 или новее
-- GPU с Compute Capability 6.0+
-- Драйвер NVIDIA, совместимый с установленной версией Toolkit
+- CUDA Toolkit 11.0 or newer
+- A GPU with Compute Capability 6.0+
+- An NVIDIA driver compatible with the installed Toolkit
 
-Если Toolkit установлен, та же команда сборки подхватит его автоматически. Целевые архитектуры GPU при необходимости переопределяются:
+If the Toolkit is installed, the same build command picks it up automatically. Target GPU architectures can be overridden when needed:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
 cmake --build build
 ```
 
-Принудительно отключить CUDA можно флагом `-DUSE_CUDA=OFF`.
+CUDA can be force-disabled with `-DUSE_CUDA=OFF`.
 
-Выбор бэкенда в рантайме осуществляется флагом `--backend` (или алиасами `-cpu` / `-gpu` / `-all`). При запуске бенчмарк выводит выбранное устройство и число задействованных SM. Если CUDA-бэкенд недоступен на целевой системе, программа автоматически откатывается на CPU.
+The backend is selected at runtime with `--backend` (or the `-cpu` / `-gpu` / `-all` aliases). On startup the benchmark prints the selected device and the number of SMs in use. If the CUDA backend is unavailable on the target system, the program automatically falls back to the CPU.
 
 ---
 
-## Использование
+## Usage
 
 ```bash
 ./build/monkey_bench [OPTIONS] <reference_file>
 ```
 
-| Опция | Описание |
+| Option | Description |
 | --- | --- |
-| `-m`, `--mode <random\|brute>` | Режим работы. По умолчанию `random`. |
-| `-b`, `--backend <cpu\|gpu\|all>` | Целевая нагрузка. По умолчанию `cpu`. |
-| `-cpu` / `-gpu` / `-all` | Короткие алиасы для `--backend`. |
-| `-t`, `--threads <N>` | Число CPU-потоков. По умолчанию — все ядра. |
-| `-d`, `--duration <sec>` | Остановиться через N секунд (режим бенчмарка). |
-| `-h`, `--help` | Справка по аргументам. |
+| `-m`, `--mode <random\|brute>` | Operating mode. Default: `random`. |
+| `-b`, `--backend <cpu\|gpu\|all>` | Target load. Default: `cpu`. |
+| `-cpu` / `-gpu` / `-all` | Short aliases for `--backend`. |
+| `-t`, `--threads <N>` | Number of CPU threads. Default: all cores. |
+| `-d`, `--duration <sec>` | Stop after N seconds (benchmark mode). |
+| `-h`, `--help` | Argument help. |
 
-Режим `-all` запускает CPU- и GPU-бэкенды одновременно и показывает суммарную пропускную способность с разбивкой по устройствам. Поскольку точное совпадение для длинных строк практически недостижимо, для замеров используйте `--duration`: программа отработает заданное время и выведет устойчивый показатель Ops/sec.
+The `-all` mode runs the CPU and GPU backends simultaneously and reports combined throughput with a per-device breakdown. Because an exact match is practically unreachable for long strings, use `--duration` for measurements: the program runs for the given time and reports a stable Ops/sec figure.
 
 ```bash
-# Замер на CPU в течение 10 секунд
+# Measure on CPU for 10 seconds
 ./build/monkey_bench reference.txt -cpu -d 10
 
-# Совместная нагрузка CPU + GPU
+# Combined CPU + GPU load
 ./build/monkey_bench reference.txt -all -d 10
 
-# Детерминированный перебор короткой строки на GPU
+# Deterministic enumeration of a short string on the GPU
 ./build/monkey_bench reference.txt -m brute -gpu
 ```
 
 ---
 
-## Методология бенчмарка локалей
+## Locale Benchmark Methodology
 
-Ключевой сценарий использования — сравнение того, как платформа справляется с разной энтропией при фиксированной длине строки. Подготовьте набор файлов одинаковой длины, но из разных систем письма, и сравните Ops/sec.
+A key use case is comparing how a platform handles different entropy at a fixed string length. Prepare a set of files of equal length but from different writing systems and compare the Ops/sec.
 
-Примеры эталонов по 5–10 символов:
+Example references of 5–10 characters:
 
-| Файл | Содержимое | Письменность | Байт на символ |
+| File | Content | Script | Bytes per char |
 | --- | --- | --- | --- |
-| `en.txt` | `HelloWorld` | Латиница | 1 |
-| `ru.txt` | `ПриветМир` | Кириллица | 2 |
-| `jp.txt` | `日本語テスト` | Кандзи/кана | 3 |
-| `emoji.txt` | `🚀🌍💡🔥💻` | Эмодзи | 4 |
+| `en.txt` | `HelloWorld` | Latin | 1 |
+| `ru.txt` | `ПриветМир` | Cyrillic | 2 |
+| `jp.txt` | `日本語テスト` | Kanji/Kana | 3 |
+| `emoji.txt` | `🚀🌍💡🔥💻` | Emoji | 4 |
 
-Запуск в режиме `random` с фиксированным временем замера для каждого файла:
+Run in `random` mode with a fixed measurement window for each file:
 
 ```bash
 ./build/monkey_bench en.txt -m random -d 10
@@ -144,43 +149,56 @@ cmake --build build
 ./build/monkey_bench emoji.txt -m random -d 10
 ```
 
-При одинаковой длине строки скорость, как правило, снижается с ростом мощности алфавита и размера символов в байтах: увеличивается диапазон случайной выборки, а сравнение многобайтовых символов требует больше работы с памятью.
+At equal string length, throughput typically drops as alphabet cardinality and per-character byte size grow: the random sampling range widens, and comparing multi-byte characters requires more memory work.
 
 ---
 
-## Архитектура
+## Architecture
 
-### Режим Random
+### Random Mode
 
-Каждый поток поддерживает локальный буфер размером с эталон. В цикле:
+Each thread keeps a local buffer the size of the reference. In a loop:
 
-1. Буфер заполняется случайными индексами из алфавита генератором `std::mt19937`.
-2. Кандидат посимвольно сравнивается с эталоном.
-3. При несовпадении буфер перезаписывается без новых аллокаций.
-4. Глобальный счётчик попыток (`std::atomic`) обновляется батчами для снижения contention; главный поток читает его для вывода статистики.
+1. The buffer is filled with random alphabet indices using `std::mt19937`.
+2. The candidate is compared character by character against the reference.
+3. On a mismatch the buffer is overwritten without new allocations.
+4. A global attempt counter (`std::atomic`) is updated in batches to reduce contention; the main thread reads it to print statistics.
 
-### Режим Brute Force
+### Brute Force Mode
 
-Строка трактуется как число в системе счисления с основанием `N`, где `N` — мощность алфавита:
+The string is treated as a number in base `N`, where `N` is the alphabet cardinality:
 
-1. Потоки делят числовое пространство на непересекающиеся чанки.
-2. Стартовое число каждого чанка конвертируется в комбинацию символов.
-3. Перебор выполняется инкрементом с переносом разрядов.
-4. Это гарантирует отсутствие дублирующей работы между потоками и полное покрытие пространства.
+1. Threads split the numeric space into disjoint chunks.
+2. The starting number of each chunk is converted into a character combination.
+3. Enumeration proceeds by carry-propagating increment.
+4. This guarantees no duplicated work between threads and full coverage of the space.
 
-### CUDA-бэкенд
+### CUDA Backend
 
-На GPU работа разворачивается на сетку блоков и потоков. В режиме `random` каждый поток инициализирует независимый генератор (cuRAND) и проверяет кандидатов в собственном регистровом буфере. В режиме `brute` глобальный индекс потока отображается на смещение в числовом пространстве, что обеспечивает детерминированное покрытие. Счётчики попыток агрегируются через атомарные операции и редукцию на устройстве, минимизируя обращения к глобальной памяти.
-
----
-
-## Ограничения
-
-- В режиме `random` поиск точного совпадения для длинных или высокоэнтропийных строк практически недостижим: математическое ожидание времени растёт как `N^L`. Для проверки корректности (фактической остановки на совпадении) используйте короткие строки из 3–5 символов.
-- Режим `brute` детерминирован, но пространство `N^L` быстро превосходит разрядность 64-битного индекса; для очень длинных строк требуется индекс расширенной разрядности.
+On the GPU, work is laid out across a grid of blocks and threads. In `random` mode each thread initializes an independent generator (cuRAND) and checks candidates in its own register-resident buffer. In `brute` mode the global thread index maps to an offset in the numeric space, giving deterministic coverage. Attempt counters are aggregated via atomic operations and on-device reduction, minimizing global-memory traffic.
 
 ---
 
-## Лицензия
+## Vision & Roadmap
 
-Распространяется на условиях лицензии MIT.
+The long-term goal of this project is to grow from a narrow "monkey" test into an **extensible benchmarking platform for computationally hard search problems**. In the same way that computing the digits of π became a canonical stress test, the aim is to provide a standardized set of "search-solvable" tasks and a unified metric for comparing CPUs and GPUs.
+
+Planned directions:
+
+- **Pluggable workloads.** A "task" abstraction on top of the enumeration/search engine — string matching is just the first workload. Next: numeric search, conjecture checking, hash preimages, combinatorial spaces.
+- **π-style numeric tasks.** Workloads with a verifiable reference result (digits of constants, prime/perfect-number search, counterexamples) where a "match" is a found solution.
+- **Comparable scoring.** A single performance figure normalized by task difficulty, suitable for cross-machine leaderboards.
+- **More backends.** Beyond CUDA: ROCm/HIP, SYCL, and multi-node execution.
+
+---
+
+## Limitations
+
+- In `random` mode, finding an exact match for long or high-entropy strings is practically unreachable: the expected time grows as `N^L`. To verify correctness (that it actually stops on a match), use short strings of 3–5 characters.
+- `brute` mode is deterministic, but the `N^L` space quickly exceeds the range of a 64-bit index; very long strings require an extended-precision index.
+
+---
+
+## License
+
+Distributed under the MIT License.
