@@ -55,7 +55,7 @@ The benchmark captures how throughput varies with alphabet cardinality (locale) 
 - **Minimal hot-loop allocations.** Working buffers are allocated once per thread before the loop; inside the loop memory is only overwritten.
 - **UTF-8 support.** Processing happens at the level of Unicode characters rather than bytes: Latin, Cyrillic, CJK ideographs, and emoji are parsed and compared correctly.
 - **Dynamic alphabet construction.** The alphabet is derived from the unique characters of the reference file, which makes preparing different-locale scenarios trivial.
-- **Heterogeneous backends.** A single C++17 core for CPU (x86_64 with AVX2/AVX-512, ARM64 with NEON) and a CUDA backend for massively parallel execution on NVIDIA GPUs.
+- **Heterogeneous backends, any GPU.** A single C++17 core runs on the CPU (x86_64 with AVX2/AVX-512, ARM64 with NEON), on NVIDIA GPUs via **CUDA**, and on any other GPU (AMD / Intel / Apple) via **Vulkan compute**. All backends share the same counter-based PRNG, so results are directly comparable. The GPU API is chosen automatically — NVIDIA → CUDA, otherwise → Vulkan — and can be forced with `--gpu-api`.
 
 ---
 
@@ -93,7 +93,22 @@ cmake --build build
 
 CUDA can be force-disabled with `-DUSE_CUDA=OFF`.
 
-The backend is selected at runtime with `--backend` (or the `-cpu` / `-gpu` / `-all` aliases). On startup the benchmark prints the selected device and the number of SMs in use. If the CUDA backend is unavailable on the target system, the program automatically falls back to the CPU.
+### Vulkan Backend
+
+For non-NVIDIA GPUs (AMD, Intel, Apple via MoltenVK) the benchmark uses a Vulkan compute backend. CMake enables it automatically when a Vulkan SDK and a GLSL compiler (`glslangValidator` or `glslc`) are found; the GLSL shader is compiled to SPIR-V and embedded into the binary.
+
+Requirements:
+
+- Vulkan SDK (headers + loader) and `glslangValidator`/`glslc` to **build**
+- At runtime, only a Vulkan-capable GPU driver (which ships the loader; Windows 10+ also bundles it)
+
+Vulkan can be force-disabled with `-DUSE_VULKAN=OFF`.
+
+The prebuilt release binaries for Windows and Linux already include **both** CUDA and Vulkan, so on any machine with a GPU it just works — no SDK needed.
+
+### Runtime backend selection
+
+`-cpu` / `-gpu` / `-all` choose the load; `--gpu-api auto|cuda|vulkan` chooses the GPU API. The default `auto` picks **CUDA on NVIDIA and Vulkan on any other GPU**, and falls back to the CPU if no GPU is available. On startup the chosen device is printed. Forcing the API lets you compare CUDA vs Vulkan on the same card.
 
 ---
 
@@ -108,6 +123,7 @@ The backend is selected at runtime with `--backend` (or the `-cpu` / `-gpu` / `-
 | `-m`, `--mode <random\|brute>` | Operating mode. Default: `random`. |
 | `-b`, `--backend <cpu\|gpu\|all>` | Target load. Default: `cpu`. |
 | `-cpu` / `-gpu` / `-all` | Short aliases for `--backend`. |
+| `--gpu-api <auto\|cuda\|vulkan>` | GPU API. Default `auto` (NVIDIA → CUDA, else Vulkan). Force a backend to compare them on the same card. |
 | `-t`, `--threads <N>` | Number of CPU threads. Default: all cores. |
 | `-d`, `--duration <sec>` | Stop after N seconds (benchmark mode). |
 | `-h`, `--help` | Argument help. |
