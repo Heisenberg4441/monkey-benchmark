@@ -60,7 +60,11 @@ endif()
 # из-за чего русский вывод превращается в кракозябры. /utf-8 фиксит источник и
 # исполнение в UTF-8.
 if(MSVC)
-    target_compile_options(monkey_bench PRIVATE /utf-8)
+    # Для C++ — напрямую; для CUDA — через -Xcompiler, иначе nvcc принимает
+    # /utf-8 за свой аргумент и падает на разборе командной строки.
+    target_compile_options(monkey_bench PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
 endif()
 
 # Linux: статически линкуем libstdc++/libgcc, чтобы бинарник не зависел от
