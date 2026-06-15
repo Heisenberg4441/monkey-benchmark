@@ -1,10 +1,10 @@
 #include "backend.h"
+#include "prng.h"
 
 #include <cstdio>
 #include <vector>
 
 #include <cuda_runtime.h>
-#include <curand_kernel.h>
 
 // CUDA-бэкенд. Сравнение, как и на CPU, свёрнуто к индексам символов в алфавите,
 // поэтому на устройство передаётся только массив target_idx — строки не нужны.
@@ -32,16 +32,18 @@ constexpr int kMaxLen = 256;
 __global__ void random_kernel(const int* __restrict__ target, int len, int n,
                               unsigned long long iters, unsigned long long seed,
                               unsigned long long* attempts, int* found) {
-    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    curandState state;
-    curand_init(seed, tid, 0, &state);
+    const unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
+    // Поток получает собственный поток случайных чисел через seed; key —
+    // порядковый номер попытки внутри потока.
+    const uint32_t thread_seed = static_cast<uint32_t>(seed) + tid * 2654435761u;
 
     unsigned long long local = 0;
     for (unsigned long long k = 0; k < iters; ++k) {
         if (*found) break;
         bool match = true;
         for (int i = 0; i < len; ++i) {
-            int c = static_cast<int>(curand(&state) % n);
+            int c = rand_index(thread_seed, static_cast<uint32_t>(k),
+                               static_cast<uint32_t>(i), n);
             if (c != target[i]) { match = false; break; }
         }
         ++local;
