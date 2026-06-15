@@ -4,6 +4,11 @@ project(monkey_benchmark LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Самодостаточные бинарники: статический MSVC-рантайм (/MT), чтобы .exe
+# не требовал установленного VC++ Redistributable. CMP0091 (NEW по умолчанию
+# с 3.15) включает абстракцию MSVC_RUNTIME_LIBRARY.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -34,10 +39,14 @@ if(USE_CUDA AND CMAKE_CUDA_COMPILER)
     target_compile_definitions(monkey_bench PRIVATE USE_CUDA)
     set_target_properties(monkey_bench PROPERTIES
         CUDA_STANDARD 17
-        CUDA_SEPARABLE_COMPILATION ON)
-    # Архитектуры по умолчанию; переопределяется -DCMAKE_CUDA_ARCHITECTURES=...
+        CUDA_SEPARABLE_COMPILATION ON
+        # Статический CUDA-рантайм: рядом с бинарником не нужны CUDA-DLL и не
+        # требуется установленный Toolkit у пользователя (только драйвер NVIDIA).
+        CUDA_RUNTIME_LIBRARY Static)
+    # Архитектуры по умолчанию; для релизного fat-binary переопределяется
+    # через -DCMAKE_CUDA_ARCHITECTURES=... (несколько -real + один -virtual/PTX).
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set_target_properties(monkey_bench PROPERTIES CUDA_ARCHITECTURES "60;70;80;86")
+        set_target_properties(monkey_bench PROPERTIES CUDA_ARCHITECTURES "75-real;86-real;89-real;90-real")
     endif()
     target_link_libraries(monkey_bench PRIVATE Threads::Threads)
 else()
@@ -52,6 +61,13 @@ endif()
 # исполнение в UTF-8.
 if(MSVC)
     target_compile_options(monkey_bench PRIVATE /utf-8)
+endif()
+
+# Linux: статически линкуем libstdc++/libgcc, чтобы бинарник не зависел от
+# версии libstdc++ в дистрибутиве пользователя. Полный -static здесь нельзя:
+# CUDA-рантайм динамически грузит драйвер через dlopen.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_options(monkey_bench PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
 # -march=native только для нативных (не кросс, не релизных) сборок CPU.
