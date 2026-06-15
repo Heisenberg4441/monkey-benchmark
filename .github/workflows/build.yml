@@ -22,22 +22,16 @@ jobs:
           - os: ubuntu-latest
             artifact_name: monkey_bench_linux_x86_64
             bin_path: build/monkey_bench
-            generator: ''
             cuda: true
             cmake_cuda: '-DUSE_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"'
           - os: macos-14 # Apple Silicon: CUDA на macOS не существует, только CPU.
             artifact_name: monkey_bench_macos_arm64
             bin_path: build/monkey_bench
-            generator: ''
             cuda: false
             cmake_cuda: '-DUSE_CUDA=OFF'
-          # Windows: генератор Ninja вместо Visual Studio — VS-генератор требует
-          # MSBuild-интеграцию CUDA, которой нет для свежих VS (v18/2026). Ninja
-          # находит nvcc по PATH напрямую; окружение MSVC даёт msvc-dev-cmd.
           - os: windows-latest
             artifact_name: monkey_bench_windows_x86_64.exe
             bin_path: build/monkey_bench.exe
-            generator: '-G Ninja'
             cuda: true
             cmake_cuda: '-DUSE_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"'
 
@@ -55,12 +49,21 @@ jobs:
         with:
           cuda: '12.8.1'
           method: 'network'
+          use-github-cache: false
+          use-local-cache: false
 
-      # Релизные бинарники без -march=native ради портируемости на любых
-      # машинах пользователей. CUDA-рантайм линкуется статически (см. CMakeLists),
-      # так что пользователю нужен лишь драйвер NVIDIA, без установки Toolkit.
-      - name: Configure
-        run: cmake -S . -B build ${{ matrix.generator }} -DCMAKE_BUILD_TYPE=Release -DNATIVE_ARCH=OFF ${{ matrix.cmake_cuda }}
+      # Релизные бинарники без -march=native ради портируемости. CUDA-рантайм
+      # линкуется статически (см. CMakeLists), пользователю нужен лишь драйвер.
+      # Windows: генератор Ninja (VS-генератор требует MSBuild-интеграцию CUDA,
+      # которой нет для свежих VS); nvcc указываем явно через CUDA_PATH, чтобы не
+      # зависеть от его наличия в PATH.
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNATIVE_ARCH=OFF -DCMAKE_CUDA_COMPILER="$env:CUDA_PATH\bin\nvcc.exe" ${{ matrix.cmake_cuda }}
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNATIVE_ARCH=OFF ${{ matrix.cmake_cuda }}
 
       - name: Build
         run: cmake --build build --config Release
