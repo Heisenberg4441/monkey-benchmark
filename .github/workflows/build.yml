@@ -55,6 +55,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    # Необходимо для создания релиза: дефолтный GITHUB_TOKEN иначе read-only (403).
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
