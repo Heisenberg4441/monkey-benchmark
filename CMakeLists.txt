@@ -7,7 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+# Оптимизацию задаёт сам CMake для конфигурации Release: -O3 для GCC/Clang,
+# /O2 для MSVC. Не переопределяем глобально, чтобы не затирать флаги MSVC.
 
 # Опция CUDA. По умолчанию пытаемся включить, если Toolkit найден.
 option(USE_CUDA "Сборка с CUDA-бэкендом" ON)
