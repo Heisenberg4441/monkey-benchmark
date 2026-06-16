@@ -1,0 +1,45 @@
+name: Tests
+
+# Лёгкий CI на каждый push/PR: сборка CPU-only + ctest, включая
+# cross-backend determinism test. Полная 3-OS матрица — в build.yml/Фазе 6.
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build + ctest (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Vulkan: loader + glslang для компиляции шейдера, mesa lavapipe как
+      # программный Vulkan-девайс, чтобы real-shader determinism test реально
+      # исполнял SPIR-V в CI без физического GPU.
+      - name: Install Vulkan + lavapipe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev glslang-tools mesa-vulkan-drivers
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DUSE_CUDA=OFF -DUSE_VULKAN=ON -DNATIVE_ARCH=OFF -DMONKEY_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Run tests
+        working-directory: build
+        # lavapipe виден как VK_ICD; форсируем софт-девайс для детерминизма.
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: ctest --output-on-failure
+
+      - name: Smoke bench
+        run: |
+          printf 'abc' > /tmp/ref.txt
+          ./build/monkey_bench /tmp/ref.txt -d 2

@@ -21,6 +21,8 @@ option(USE_VULKAN "Сборка с Vulkan-бэкендом (любой GPU)" ON)
 # -march=native даёт лучшую производительность локально, но делает бинарник
 # непортируемым. Для релизных сборок выключайте: -DNATIVE_ARCH=OFF.
 option(NATIVE_ARCH "Оптимизация под локальную микроархитектуру (-march=native)" ON)
+# Юнит-тесты (Catch2). CPU-only, без GPU SDK — собираются в любом окружении.
+option(MONKEY_BUILD_TESTS "Сборка юнит-тестов (Catch2 + ctest)" ON)
 
 find_package(Threads REQUIRED)
 
@@ -104,6 +106,12 @@ endif()
 # динамически грузят драйвер через dlopen.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_link_options(monkey_bench PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+
+# --- Тесты ------------------------------------------------------------------
+if(MONKEY_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 # -march=native только для нативных (не кросс, не релизных) сборок CPU.

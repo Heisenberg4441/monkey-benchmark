@@ -1,5 +1,7 @@
 # Build
 /build/
+/build_test/
+/build*/
 monkey_bench
 monkey_bench_cuda
 monkey_benchmark

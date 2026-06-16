@@ -1,0 +1,14 @@
+# Соответствует сложившемуся стилю репозитория: 4 пробела, лимит 100 колонок,
+# K&R-скобки, указатель прижат к типу.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+PointerAlignment: Left
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortBlocksOnASingleLine: Empty
+SortIncludes: CaseInsensitive
+SpaceAfterCStyleCast: false
