@@ -2,7 +2,6 @@
 #include "prng.h"
 
 #include <cstdint>
-#include <random>
 #include <thread>
 #include <vector>
 
@@ -18,8 +17,9 @@ void random_worker(unsigned thread_id, const Config& cfg, Control& ctrl) {
     const int len = cfg.len;
     const int n = cfg.n;
     // Свой поток случайных чисел на воркер; key — номер попытки внутри потока.
-    std::random_device rd;
-    const uint32_t thread_seed = rd() + thread_id * 2654435761u;
+    // seed детерминирован (cfg.seed, CLI --seed): прогон воспроизводим, а
+    // вывод бит-в-бит совпадает с CUDA/Vulkan при том же thread_seed.
+    const uint32_t thread_seed = cfg.seed + thread_id * 2654435761u;
     uint32_t key = 0;
     unsigned long long local = 0;
 

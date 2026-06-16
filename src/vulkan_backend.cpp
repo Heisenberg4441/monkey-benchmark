@@ -327,7 +327,7 @@ void run_vulkan(const Config& cfg, Control& ctrl) {
     pc.n = cfg.n;
     pc.mode = (cfg.mode == Mode::Random) ? 0u : 1u;
     pc.total = total_threads;
-    pc.seed = 0x9e3779b9u;
+    pc.seed = cfg.seed; // детерминирован (CLI --seed), согласован с CPU/CUDA
     pc.base = 0;
 
     unsigned long long attempts = 0;

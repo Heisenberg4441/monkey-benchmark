@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -45,6 +46,8 @@ struct Args {
     GpuApi gpu_api = GpuApi::Auto;
     unsigned threads = 0;
     double duration = 0.0;
+    uint32_t seed = 0x9e3779b9u;
+    bool seed_set = false;
 };
 
 void print_help(const char* prog) {
@@ -58,6 +61,7 @@ void print_help(const char* prog) {
         "      --gpu-api <auto|cuda|vulkan>  выбор GPU-API (default: auto)\n"
         "  -t, --threads <N>             число CPU-потоков (default: auto)\n"
         "  -d, --duration <sec>          остановиться через N секунд (бенчмарк)\n"
+        "      --seed <N>                seed counter-based PRNG (воспроизводимость)\n"
         "  -h, --help                    показать эту справку\n";
 }
 
@@ -117,6 +121,12 @@ bool parse_args(int argc, char** argv, Args& args) {
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
             args.duration = std::strtod(v.c_str(), nullptr);
         }
+        else if (key == "--seed") {
+            std::string v;
+            if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
+            args.seed = static_cast<uint32_t>(std::strtoul(v.c_str(), nullptr, 0));
+            args.seed_set = true;
+        }
         else if (!a.empty() && a[0] == '-') {
             std::cerr << "Неизвестная опция: " << a << "\n";
             return false;
@@ -173,6 +183,7 @@ int run(int argc, char** argv) {
     cfg.backend = args.backend;
     cfg.threads = args.threads;
     cfg.duration = args.duration;
+    cfg.seed = args.seed;
 
     // Разрешаем фактически используемые бэкенды с откатом на CPU.
     bool use_cpu = (cfg.backend == Backend::Cpu || cfg.backend == Backend::All);
@@ -203,6 +214,7 @@ int run(int argc, char** argv) {
     std::cout << "Бэкенд:           " << backend_name(cfg.backend)
               << (use_cpu && use_gpu ? std::string(" (cpu+") + gpu_label + ")"
                                      : (use_gpu ? std::string(" (") + gpu_label + ")" : std::string(" (cpu)"))) << "\n";
+    if (args.seed_set) std::cout << "Seed PRNG:        " << cfg.seed << "\n";
     if (cfg.duration > 0) std::cout << "Лимит времени:    " << cfg.duration << " c\n";
     std::cout << "\n";
 

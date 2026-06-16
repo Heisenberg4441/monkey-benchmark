@@ -22,6 +22,7 @@ struct Config {
     Backend backend = Backend::Cpu;
     unsigned threads = 0;                // CPU-потоки (0 => hardware_concurrency)
     double duration = 0.0;               // лимит в секундах (0 => до совпадения)
+    uint32_t seed = 0x9e3779b9u;         // seed counter-based PRNG (CLI --seed)
 };
 
 // Общее состояние, разделяемое между бэкендами и репортером.

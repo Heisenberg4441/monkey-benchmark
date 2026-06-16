@@ -121,7 +121,8 @@ void run_cuda(const Config& cfg, Control& ctrl) {
     CUDA_OK(cudaMemset(d_attempts, 0, sizeof(unsigned long long)));
     CUDA_OK(cudaMemset(d_found, 0, sizeof(int)));
 
-    unsigned long long seed = 0x9e3779b97f4a7c15ULL;
+    // seed детерминирован (cfg.seed, CLI --seed) и согласован с CPU-бэкендом.
+    unsigned long long seed = cfg.seed;
     unsigned long long brute_base = 0;
 
     while (!ctrl.stop.load(std::memory_order_relaxed)) {

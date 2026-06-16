@@ -1,9 +1,14 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
-// Compute-шейдер Vulkan-бэкенда. Логика и PRNG идентичны CPU/CUDA
-// (см. src/prng.h) — namely PCG-hash на 32 битах, без int64.
+// Compute-шейдер Vulkan-бэкенда. PRNG и его маппинг дословно совпадают с
+// CPU/CUDA (см. src/philox.h): Philox4x32-10 на 32-битной арифметике.
+// Бит-в-бит идентичность с CPU проверяется тестами test_glsl_philox и
+// test_vulkan_philox.
 
 layout(local_size_x = 256) in;
+
+#include "philox.glsl"
 
 layout(std430, binding = 0) readonly buffer TargetBuf { int target[]; };
 layout(std430, binding = 1) buffer FoundBuf { uint found; };
@@ -17,17 +22,6 @@ layout(push_constant) uniform PC {
     uint base;   // brute: стартовый глобальный индекс
     uint total;  // brute: всего потоков (шаг перебора)
 } pc;
-
-uint pcg_hash(uint x) {
-    uint state = x * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28) + 4u)) ^ state) * 277803737u;
-    return (word >> 22) ^ word;
-}
-
-int rand_index(uint seed, uint key, uint pos, int n) {
-    uint r = pcg_hash(seed ^ pcg_hash(key + pos * 2654435761u));
-    return int(r % uint(n));
-}
 
 void main() {
     uint tid = gl_GlobalInvocationID.x;
