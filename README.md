@@ -55,7 +55,7 @@ The benchmark captures how throughput varies with alphabet cardinality (locale) 
 - **Minimal hot-loop allocations.** Working buffers are allocated once per thread before the loop; inside the loop memory is only overwritten.
 - **UTF-8 support.** Processing happens at the level of Unicode characters rather than bytes: Latin, Cyrillic, CJK ideographs, and emoji are parsed and compared correctly.
 - **Dynamic alphabet construction.** The alphabet is derived from the unique characters of the reference file, which makes preparing different-locale scenarios trivial.
-- **Heterogeneous backends, any GPU.** A single C++17 core runs on the CPU (x86_64 with AVX2/AVX-512, ARM64 with NEON), on NVIDIA GPUs via **CUDA**, and on any other GPU (AMD / Intel / Apple) via **Vulkan compute**. All backends share the same counter-based PRNG, so results are directly comparable. The GPU API is chosen automatically — NVIDIA → CUDA, otherwise → Vulkan — and can be forced with `--gpu-api`.
+- **Heterogeneous backends, any GPU.** A single C++17 core runs on the CPU (x86_64 with AVX2/AVX-512, ARM64 with NEON), on NVIDIA GPUs via **CUDA**, and on any other GPU (AMD / Intel / Apple) via **Vulkan compute**. All backends run the *same* counter-based PRNG — **Philox4x32-10** (Salmon et al., SC'11) — implemented once and shared verbatim across CPU, CUDA and GLSL, so the generated streams are bit-identical (see [Determinism](#determinism)). The GPU API is chosen automatically — NVIDIA → CUDA, otherwise → Vulkan — and can be forced with `--gpu-api`.
 
 ---
 
@@ -126,6 +126,7 @@ The prebuilt release binaries for Windows and Linux already include **both** CUD
 | `--gpu-api <auto\|cuda\|vulkan>` | GPU API. Default `auto` (NVIDIA → CUDA, else Vulkan). Force a backend to compare them on the same card. |
 | `-t`, `--threads <N>` | Number of CPU threads. Default: all cores. |
 | `-d`, `--duration <sec>` | Stop after N seconds (benchmark mode). |
+| `--seed <N>` | Seed for the counter-based PRNG (reproducible runs). Default: fixed constant. |
 | `-h`, `--help` | Argument help. |
 
 The `-all` mode runs the CPU and GPU backends simultaneously and reports combined throughput with a per-device breakdown. Because an exact match is practically unreachable for long strings, use `--duration` for measurements: the program runs for the given time and reports a stable Ops/sec figure.
@@ -175,7 +176,7 @@ At equal string length, throughput typically drops as alphabet cardinality and p
 
 Each thread keeps a local buffer the size of the reference. In a loop:
 
-1. The buffer is filled with random alphabet indices using `std::mt19937`.
+1. The buffer is filled with alphabet indices drawn from the shared Philox4x32-10 counter-based PRNG (see [Determinism](#determinism)). The candidate's `(seed, key, position)` maps directly to a counter — no per-thread generator state.
 2. The candidate is compared character by character against the reference.
 3. On a mismatch the buffer is overwritten without new allocations.
 4. A global attempt counter (`std::atomic`) is updated in batches to reduce contention; the main thread reads it to print statistics.
@@ -191,7 +192,20 @@ The string is treated as a number in base `N`, where `N` is the alphabet cardina
 
 ### CUDA Backend
 
-On the GPU, work is laid out across a grid of blocks and threads. In `random` mode each thread initializes an independent generator (cuRAND) and checks candidates in its own register-resident buffer. In `brute` mode the global thread index maps to an offset in the numeric space, giving deterministic coverage. Attempt counters are aggregated via atomic operations and on-device reduction, minimizing global-memory traffic.
+On the GPU, work is laid out across a grid of blocks and threads. In `random` mode each thread evaluates the same Philox4x32-10 generator over its own counter range (no cuRAND, no per-thread RNG state) and checks candidates in registers. In `brute` mode the global thread index maps to an offset in the numeric space, giving deterministic coverage. Attempt counters are aggregated via atomic operations and on-device reduction, minimizing global-memory traffic.
+
+### Determinism
+
+The PRNG is the counter-based **Philox4x32-10** (J. Salmon, M. Moraes, R. Dror, D. Shaw, *"Parallel Random Numbers: As Easy as 1, 2, 3"*, SC'11; reference implementation: Random123). It is stateless: each output is a pure function of a 128-bit counter and a 64-bit key, which makes it trivially parallelizable and identical regardless of device.
+
+A single implementation lives in [`src/philox.h`](src/philox.h) (used by CPU and, via `__host__ __device__`, by CUDA) and a line-for-line GLSL port in [`src/philox.glsl`](src/philox.glsl) (shared by the Vulkan shader). The claim that all backends produce identical streams is backed by tests, not assertion:
+
+- `test_philox` — published known-answer vectors (Random123 `kat_vectors`).
+- `test_glsl_philox` — the GLSL port compared to the CPU canon over 2¹⁶ outputs.
+- `test_vulkan_philox` — the **real compiled SPIR-V** dispatched on a Vulkan device (Mesa lavapipe in CI) vs the CPU canon.
+- `test_cuda_philox` — the same check on a CUDA device.
+
+Runs are reproducible: the seed is fixed by default and configurable with `--seed`.
 
 ---
 
