@@ -48,6 +48,7 @@ struct Args {
     double duration = 0.0;
     uint32_t seed = 0x9e3779b9u;
     bool seed_set = false;
+    uint64_t batch_size = 8192;
 };
 
 void print_help(const char* prog) {
@@ -62,6 +63,7 @@ void print_help(const char* prog) {
         "  -t, --threads <N>             число CPU-потоков (default: auto)\n"
         "  -d, --duration <sec>          остановиться через N секунд (бенчмарк)\n"
         "      --seed <N>                seed counter-based PRNG (воспроизводимость)\n"
+        "      --batch-size <N>          гранулярность синка счётчика (default: 8192)\n"
         "  -h, --help                    показать эту справку\n";
 }
 
@@ -127,6 +129,12 @@ bool parse_args(int argc, char** argv, Args& args) {
             args.seed = static_cast<uint32_t>(std::strtoul(v.c_str(), nullptr, 0));
             args.seed_set = true;
         }
+        else if (key == "--batch-size") {
+            std::string v;
+            if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
+            args.batch_size = std::strtoull(v.c_str(), nullptr, 10);
+            if (args.batch_size == 0) { std::cerr << "--batch-size должен быть > 0\n"; return false; }
+        }
         else if (!a.empty() && a[0] == '-') {
             std::cerr << "Неизвестная опция: " << a << "\n";
             return false;
@@ -184,6 +192,7 @@ int run(int argc, char** argv) {
     cfg.threads = args.threads;
     cfg.duration = args.duration;
     cfg.seed = args.seed;
+    cfg.batch_size = args.batch_size;
 
     // Разрешаем фактически используемые бэкенды с откатом на CPU.
     bool use_cpu = (cfg.backend == Backend::Cpu || cfg.backend == Backend::All);
@@ -230,7 +239,7 @@ int run(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         double elapsed = std::chrono::duration<double>(
             std::chrono::high_resolution_clock::now() - start).count();
-        unsigned long long cpu_a = ctrl.cpu_attempts.load(std::memory_order_relaxed);
+        unsigned long long cpu_a = ctrl.cpu_counters.total();
         unsigned long long gpu_a = ctrl.gpu_attempts.load(std::memory_order_relaxed);
         unsigned long long total = cpu_a + gpu_a;
         long long rate = elapsed > 0 ? static_cast<long long>(total / elapsed) : 0;
@@ -249,7 +258,7 @@ int run(int argc, char** argv) {
 
     double total_time = std::chrono::duration<double>(
         std::chrono::high_resolution_clock::now() - start).count();
-    unsigned long long total = ctrl.cpu_attempts.load() + ctrl.gpu_attempts.load();
+    unsigned long long total = ctrl.cpu_counters.total() + ctrl.gpu_attempts.load();
 
     std::cout << "\n\n";
     if (ctrl.found.load()) std::cout << "=== СОВПАДЕНИЕ НАЙДЕНО ===\n";

@@ -127,6 +127,7 @@ The prebuilt release binaries for Windows and Linux already include **both** CUD
 | `-t`, `--threads <N>` | Number of CPU threads. Default: all cores. |
 | `-d`, `--duration <sec>` | Stop after N seconds (benchmark mode). |
 | `--seed <N>` | Seed for the counter-based PRNG (reproducible runs). Default: fixed constant. |
+| `--batch-size <N>` | Hot-loop iterations between counter syncs (CPU flush interval; GPU iters/thread per dispatch). Default: 8192. |
 | `-h`, `--help` | Argument help. |
 
 The `-all` mode runs the CPU and GPU backends simultaneously and reports combined throughput with a per-device breakdown. Because an exact match is practically unreachable for long strings, use `--duration` for measurements: the program runs for the given time and reports a stable Ops/sec figure.
@@ -179,7 +180,7 @@ Each thread keeps a local buffer the size of the reference. In a loop:
 1. The buffer is filled with alphabet indices drawn from the shared Philox4x32-10 counter-based PRNG (see [Determinism](#determinism)). The candidate's `(seed, key, position)` maps directly to a counter — no per-thread generator state.
 2. The candidate is compared character by character against the reference.
 3. On a mismatch the buffer is overwritten without new allocations.
-4. A global attempt counter (`std::atomic`) is updated in batches to reduce contention; the main thread reads it to print statistics.
+4. Each thread keeps its attempt count in a register and periodically (every `--batch-size` iterations) publishes a snapshot to its own cache-line-padded slot. The hot loop performs no atomic read-modify-write on shared memory; the main thread sums the per-thread snapshots to print statistics. See [BENCH.md](BENCH.md) for the contention this avoids.
 
 ### Brute Force Mode
 

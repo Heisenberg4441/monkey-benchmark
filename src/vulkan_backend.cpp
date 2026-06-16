@@ -18,9 +18,8 @@ namespace monkey {
 
 namespace {
 
-constexpr uint32_t kLocalSize = 256;       // должно совпадать с шейдером
-constexpr uint32_t kGroups = 2048;         // число рабочих групп
-constexpr uint32_t kItersPerThread = 2048; // кандидатов на инвокацию за диспатч
+constexpr uint32_t kLocalSize = 256; // должно совпадать с шейдером
+constexpr uint32_t kGroups = 2048;   // число рабочих групп
 
 struct PushConstants {
     uint32_t seed;
@@ -320,9 +319,10 @@ void run_vulkan(const Config& cfg, Control& ctrl) {
     VkFence fence;
     VK_OK(vkCreateFence(dev, &fci, nullptr, &fence));
 
-    // Цикл диспатчей.
+    // Цикл диспатчей. iters/инвокацию задаётся --batch-size (см. cfg.batch_size).
+    const uint32_t iters_per_thread = static_cast<uint32_t>(cfg.batch_size);
     PushConstants pc{};
-    pc.iters = kItersPerThread;
+    pc.iters = iters_per_thread;
     pc.len = cfg.len;
     pc.n = cfg.n;
     pc.mode = (cfg.mode == Mode::Random) ? 0u : 1u;
@@ -356,7 +356,7 @@ void run_vulkan(const Config& cfg, Control& ctrl) {
         vkQueueSubmit(queue, 1, &si, fence);
         vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX);
 
-        attempts += (unsigned long long)total_threads * kItersPerThread;
+        attempts += (unsigned long long)total_threads * iters_per_thread;
         ctrl.gpu_attempts.store(attempts, std::memory_order_relaxed);
 
         if (*reinterpret_cast<uint32_t*>(found_ptr) != 0) {
@@ -366,7 +366,7 @@ void run_vulkan(const Config& cfg, Control& ctrl) {
         }
 
         pc.seed += total_threads;
-        pc.base += total_threads * kItersPerThread;
+        pc.base += total_threads * iters_per_thread;
     }
 
     vkDeviceWaitIdle(dev);

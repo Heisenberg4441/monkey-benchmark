@@ -14,9 +14,6 @@ namespace monkey {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
-// Сколько кандидатов проверяет один поток за один запуск ядра. Амортизирует
-// оверхед запуска и копирования счётчиков между host и device.
-constexpr unsigned long long kItersPerThread = 4096;
 constexpr int kMaxLen = 256;
 
 #define CUDA_OK(call)                                                          \
@@ -29,9 +26,16 @@ constexpr int kMaxLen = 256;
         }                                                                     \
     } while (0)
 
+// Редукция счётчика попыток: каждый поток копит local, складывает его в
+// общий для блока счётчик в shared memory, а в global делается ОДИН atomicAdd
+// на блок (а не на тред) — это убирает contention на глобальном атомике.
 __global__ void random_kernel(const int* __restrict__ target, int len, int n,
                               unsigned long long iters, unsigned long long seed,
                               unsigned long long* attempts, int* found) {
+    __shared__ unsigned long long block_sum;
+    if (threadIdx.x == 0) block_sum = 0;
+    __syncthreads();
+
     const unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
     // Поток получает собственный поток случайных чисел через seed; key —
     // порядковый номер попытки внутри потока.
@@ -49,13 +53,20 @@ __global__ void random_kernel(const int* __restrict__ target, int len, int n,
         ++local;
         if (match) atomicExch(found, 1);
     }
-    atomicAdd(attempts, local);
+
+    atomicAdd(&block_sum, local); // быстрый atomic в shared memory
+    __syncthreads();
+    if (threadIdx.x == 0) atomicAdd(attempts, block_sum);
 }
 
 __global__ void brute_kernel(const int* __restrict__ target, int len, int n,
                              unsigned long long base, unsigned long long total,
                              unsigned long long iters,
                              unsigned long long* attempts, int* found) {
+    __shared__ unsigned long long block_sum;
+    if (threadIdx.x == 0) block_sum = 0;
+    __syncthreads();
+
     const unsigned long long gid = base + blockIdx.x * blockDim.x + threadIdx.x;
     int comb[kMaxLen];
 
@@ -75,7 +86,10 @@ __global__ void brute_kernel(const int* __restrict__ target, int len, int n,
         ++local;
         if (match) atomicExch(found, 1);
     }
-    atomicAdd(attempts, local);
+
+    atomicAdd(&block_sum, local); // быстрый atomic в shared memory
+    __syncthreads();
+    if (threadIdx.x == 0) atomicAdd(attempts, block_sum);
 }
 
 } // namespace
@@ -121,6 +135,10 @@ void run_cuda(const Config& cfg, Control& ctrl) {
     CUDA_OK(cudaMemset(d_attempts, 0, sizeof(unsigned long long)));
     CUDA_OK(cudaMemset(d_found, 0, sizeof(int)));
 
+    // Сколько кандидатов проверяет один поток за запуск ядра (CLI --batch-size):
+    // амортизирует оверхед запуска и копирования счётчиков host<->device.
+    const unsigned long long iters_per_thread = cfg.batch_size;
+
     // seed детерминирован (cfg.seed, CLI --seed) и согласован с CPU-бэкендом.
     unsigned long long seed = cfg.seed;
     unsigned long long brute_base = 0;
@@ -128,14 +146,14 @@ void run_cuda(const Config& cfg, Control& ctrl) {
     while (!ctrl.stop.load(std::memory_order_relaxed)) {
         if (cfg.mode == Mode::Random) {
             random_kernel<<<blocks, kThreadsPerBlock>>>(
-                d_target, cfg.len, cfg.n, kItersPerThread, seed, d_attempts,
+                d_target, cfg.len, cfg.n, iters_per_thread, seed, d_attempts,
                 d_found);
             seed += total_threads;
         } else {
             brute_kernel<<<blocks, kThreadsPerBlock>>>(
                 d_target, cfg.len, cfg.n, brute_base, total_threads,
-                kItersPerThread, d_attempts, d_found);
-            brute_base += total_threads * kItersPerThread;
+                iters_per_thread, d_attempts, d_found);
+            brute_base += total_threads * iters_per_thread;
         }
         CUDA_OK(cudaGetLastError());
         CUDA_OK(cudaDeviceSynchronize());

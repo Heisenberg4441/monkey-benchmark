@@ -9,10 +9,10 @@ namespace monkey {
 
 namespace {
 
-// Размер локального батча перед атомарным обновлением глобального счётчика.
-// Снижает contention на общем atomic в горячем цикле.
-constexpr unsigned long long kBatch = 8192;
-
+// Воркер ведёт локальный счётчик в регистре/стеке и сбрасывает его снимок в
+// свой (никем больше не читаемый/не пишемый) слот раз в batch_size итераций.
+// В горячем цикле НЕТ ни одного atomic-RMW на общую память — снимок это
+// relaxed store в собственную линию кэша. Контеншна на счётчике нет.
 void random_worker(unsigned thread_id, const Config& cfg, Control& ctrl) {
     const int len = cfg.len;
     const int n = cfg.n;
@@ -20,8 +20,10 @@ void random_worker(unsigned thread_id, const Config& cfg, Control& ctrl) {
     // seed детерминирован (cfg.seed, CLI --seed): прогон воспроизводим, а
     // вывод бит-в-бит совпадает с CUDA/Vulkan при том же thread_seed.
     const uint32_t thread_seed = cfg.seed + thread_id * 2654435761u;
+    const uint64_t batch = cfg.batch_size;
     uint32_t key = 0;
-    unsigned long long local = 0;
+    uint64_t local = 0;
+    uint64_t since_flush = 0;
 
     while (!ctrl.stop.load(std::memory_order_relaxed)) {
         bool match = true;
@@ -33,32 +35,35 @@ void random_worker(unsigned thread_id, const Config& cfg, Control& ctrl) {
             }
         }
         ++key;
+        ++local;
 
-        if (++local >= kBatch) {
-            ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
-            local = 0;
+        if (++since_flush >= batch) {
+            ctrl.cpu_counters.record(thread_id, local);
+            since_flush = 0;
         }
 
         if (match) {
-            ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
+            ctrl.cpu_counters.record(thread_id, local);
             ctrl.found.store(true, std::memory_order_release);
             ctrl.stop.store(true, std::memory_order_release);
             return;
         }
     }
-    ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
+    ctrl.cpu_counters.record(thread_id, local);
 }
 
 void brute_worker(unsigned thread_id, unsigned total_threads, const Config& cfg, Control& ctrl) {
     const int n = cfg.n;
     const int len = cfg.len;
+    const uint64_t batch = cfg.batch_size;
 
     const unsigned long long chunk = 1000000ULL;
     unsigned long long start_idx = static_cast<unsigned long long>(thread_id) * chunk;
     const unsigned long long stride = static_cast<unsigned long long>(total_threads) * chunk;
 
     std::vector<int> comb(len, 0);
-    unsigned long long local = 0;
+    uint64_t local = 0;
+    uint64_t since_flush = 0;
 
     while (!ctrl.stop.load(std::memory_order_relaxed)) {
         // Стартовое число чанка -> комбинация в системе счисления с основанием n.
@@ -70,7 +75,7 @@ void brute_worker(unsigned thread_id, unsigned total_threads, const Config& cfg,
 
         for (unsigned long long i = 0; i < chunk; ++i) {
             if (ctrl.stop.load(std::memory_order_relaxed)) {
-                ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
+                ctrl.cpu_counters.record(thread_id, local);
                 return;
             }
 
@@ -82,13 +87,14 @@ void brute_worker(unsigned thread_id, unsigned total_threads, const Config& cfg,
                 }
             }
 
-            if (++local >= kBatch) {
-                ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
-                local = 0;
+            ++local;
+            if (++since_flush >= batch) {
+                ctrl.cpu_counters.record(thread_id, local);
+                since_flush = 0;
             }
 
             if (match) {
-                ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
+                ctrl.cpu_counters.record(thread_id, local);
                 ctrl.found.store(true, std::memory_order_release);
                 ctrl.stop.store(true, std::memory_order_release);
                 return;
@@ -102,7 +108,7 @@ void brute_worker(unsigned thread_id, unsigned total_threads, const Config& cfg,
         }
         start_idx += stride;
     }
-    ctrl.cpu_attempts.fetch_add(local, std::memory_order_relaxed);
+    ctrl.cpu_counters.record(thread_id, local);
 }
 
 } // namespace
@@ -111,6 +117,9 @@ void run_cpu(const Config& cfg, Control& ctrl) {
     unsigned threads = cfg.threads;
     if (threads == 0) threads = std::thread::hardware_concurrency();
     if (threads == 0) threads = 1;
+
+    // Слоты счётчиков по одному на воркер; публикуется до старта потоков.
+    ctrl.cpu_counters.resize(threads);
 
     std::vector<std::thread> pool;
     pool.reserve(threads);
