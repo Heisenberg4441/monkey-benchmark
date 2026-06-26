@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "../philox.h"
+#include "../uint128.h"
 
 // Per-counter математика monkey-workload'а. Header-only и __host__ __device__:
 // один и тот же код вызывается CPU-workload'ом и CUDA-ядром, поэтому кандидат
@@ -28,6 +29,7 @@ WK_HD inline int monkey_char(uint32_t seed, uint64_t counter, uint32_t pos, int 
 
 // Совпадает ли кандидат counter'а с эталоном target[0..len)?
 // mode 0 = random (кандидат из PRNG), 1 = brute (counter как число по основанию n).
+// random-ветка принимает 64-битный counter (PRNG-ключ).
 WK_HD inline bool monkey_match(int mode, uint32_t seed, uint64_t counter,
                                const int* target, int len, int n) {
     if (mode == 0) {
@@ -49,6 +51,20 @@ WK_HD inline bool monkey_match(int mode, uint32_t seed, uint64_t counter,
         }
     }
     return true;
+}
+
+// 128-битная версия brute-сравнения: counter как 128-битное число в базе n.
+WK_HD inline bool monkey_match_brute_128(Counter counter, const int* target, int len, int n) {
+    const uint32_t base = static_cast<uint32_t>(n);
+    Counter t = counter;
+    for (int p = len; p-- > 0;) {
+        uint32_t rem = 0;
+        t = counter_divmod(t, base, &rem);
+        if (static_cast<int>(rem) != target[p]) {
+            return false;
+        }
+    }
+    return counter_eq_zero(t);
 }
 
 } // namespace kernel

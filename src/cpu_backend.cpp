@@ -17,8 +17,8 @@ namespace {
 void worker(unsigned tid, unsigned total, const Config& cfg, Control& ctrl,
             const IWorkload& wl) {
     const uint64_t batch = cfg.batch_size;
-    const uint64_t stride = static_cast<uint64_t>(total) * batch;
-    uint64_t counter = static_cast<uint64_t>(tid) * batch;
+    const Counter stride = counter_from_u64(static_cast<uint64_t>(total)) * batch;
+    Counter counter = counter_from_u64(static_cast<uint64_t>(tid)) * batch;
     WorkloadResult res;
 
     while (!ctrl.stop.load(std::memory_order_relaxed)) {
@@ -30,7 +30,7 @@ void worker(unsigned tid, unsigned total, const Config& cfg, Control& ctrl,
             ctrl.stop.store(true, std::memory_order_release);
             break;
         }
-        counter += stride;
+        counter = counter + stride;
     }
     ctrl.cpu_counters.record(tid, res.iterations);
     ctrl.checksum.fetch_xor(res.checksum, std::memory_order_relaxed);

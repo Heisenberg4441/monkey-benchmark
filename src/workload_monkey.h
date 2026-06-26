@@ -14,7 +14,7 @@ class MonkeyWorkload : public IWorkload {
 public:
     const char* name() const override { return "monkey"; }
     void prepare(const Config& cfg) override;
-    void execute_batch(uint64_t counter_start, uint64_t batch_size,
+    void execute_batch(Counter counter_start, uint64_t batch_size,
                        WorkloadResult& out) const override;
     bool verify() const override;
 
@@ -24,6 +24,7 @@ private:
     int n_ = 0;
     int len_ = 0;
     std::vector<int> target_;
+    bool brute_fits_in_64_ = true; // n^len < 2^64
 };
 
 } // namespace monkey

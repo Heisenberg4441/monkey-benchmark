@@ -19,6 +19,7 @@ monkey_add_test(test_philox test_philox.cpp)
 monkey_add_test(test_glsl_philox test_glsl_philox.cpp)
 monkey_add_test(test_counters test_counters.cpp)
 monkey_add_test(test_workload_monkey test_workload_monkey.cpp)
+monkey_add_test(test_uint128 test_uint128.cpp)
 
 # --- Слой 2: реальный прогон SPIR-V на Vulkan-устройстве --------------------
 # Собирается только если есть Vulkan SDK и компилятор GLSL. В рантайме тест сам

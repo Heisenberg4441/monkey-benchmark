@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "backend.h"
+#include "uint128.h"
 
 // Подключаемый workload: "что именно считает бенчмарк". Бэкенды (CPU/CUDA)
 // отвечают за потоки, счётчики и остановку; workload — за чистую функцию от
@@ -19,13 +20,13 @@ struct WorkloadResult {
     uint64_t iterations = 0;     // сколько counter'ов обработано (для Ops/sec)
     uint64_t checksum = 0;       // аккумулятор выходов: воспроизводим + анти-DCE
     bool solution_found = false; // ранний выход (monkey: точное совпадение)
-    uint64_t solution_counter = 0;
+    Counter solution_counter = counter_from_u64(0);
 
     void reset() {
         iterations = 0;
         checksum = 0;
         solution_found = false;
-        solution_counter = 0;
+        solution_counter = counter_from_u64(0);
     }
 };
 
@@ -42,7 +43,7 @@ public:
     // Pure, без аллокаций: обрабатывает counter'ы [counter_start, +batch_size),
     // аккумулируя в out. Может выйти раньше, выставив solution_found.
     // const + без общего состояния => безопасно вызывать из всех потоков.
-    virtual void execute_batch(uint64_t counter_start, uint64_t batch_size,
+    virtual void execute_batch(Counter counter_start, uint64_t batch_size,
                                WorkloadResult& out) const = 0;
 
     // Самопроверка корректности против независимого эталона (gate допуска).

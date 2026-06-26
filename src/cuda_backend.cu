@@ -1,5 +1,6 @@
 #include "backend.h"
 #include "prng.h"
+#include "uint128.h"
 
 #include <cstdio>
 #include <vector>
@@ -37,8 +38,6 @@ __global__ void random_kernel(const int* __restrict__ target, int len, int n,
     __syncthreads();
 
     const unsigned tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Поток получает собственный поток случайных чисел через seed; key —
-    // порядковый номер попытки внутри потока.
     const uint32_t thread_seed = static_cast<uint32_t>(seed) + tid * 2654435761u;
 
     unsigned long long local = 0;
@@ -54,30 +53,41 @@ __global__ void random_kernel(const int* __restrict__ target, int len, int n,
         if (match) atomicExch(found, 1);
     }
 
-    atomicAdd(&block_sum, local); // быстрый atomic в shared memory
+    atomicAdd(&block_sum, local);
     __syncthreads();
     if (threadIdx.x == 0) atomicAdd(attempts, block_sum);
 }
 
+// 128-битный brute-перебор. base_lo/hi — стартовый глобальный индекс блока,
+// total — полное число потоков в гриде (64 бита, число потоков всегда < 2^32).
+// Индексация спроектирована так, чтобы каждый перезапуск ядра продолжал с
+// того же места, не дублируя работу.
 __global__ void brute_kernel(const int* __restrict__ target, int len, int n,
-                             unsigned long long base, unsigned long long total,
-                             unsigned long long iters,
+                             uint64_t base_lo, uint64_t base_hi,
+                             unsigned long long total, unsigned long long iters,
                              unsigned long long* attempts, int* found) {
     __shared__ unsigned long long block_sum;
     if (threadIdx.x == 0) block_sum = 0;
     __syncthreads();
 
-    const unsigned long long gid = base + blockIdx.x * blockDim.x + threadIdx.x;
-    int comb[kMaxLen];
+    const Counter block_offset = counter_from_u64(blockIdx.x * kThreadsPerBlock +
+                                                  threadIdx.x);
+    Counter gid = {{base_lo, base_hi}};
+    gid = gid + block_offset;
 
     unsigned long long local = 0;
     for (unsigned long long step = 0; step < iters; ++step) {
         if (*found) break;
-        // Глобальный индекс кандидата -> комбинация по основанию n.
-        unsigned long long idx = gid + step * total;
+        const Counter offset = counter_from_u64(step * total);
+        Counter idx = gid + offset;
+
+        // Извлечение цифр n-ричного числа (idx) в локальный массив.
+        int comb[kMaxLen];
+        const uint32_t base = static_cast<uint32_t>(n);
         for (int i = 0; i < len; ++i) {
-            comb[len - 1 - i] = static_cast<int>(idx % n);
-            idx /= n;
+            uint32_t rem = 0;
+            idx = counter_divmod(idx, base, &rem);
+            comb[len - 1 - i] = static_cast<int>(rem);
         }
         bool match = true;
         for (int j = 0; j < len; ++j) {
@@ -87,7 +97,7 @@ __global__ void brute_kernel(const int* __restrict__ target, int len, int n,
         if (match) atomicExch(found, 1);
     }
 
-    atomicAdd(&block_sum, local); // быстрый atomic в shared memory
+    atomicAdd(&block_sum, local);
     __syncthreads();
     if (threadIdx.x == 0) atomicAdd(attempts, block_sum);
 }
@@ -141,7 +151,7 @@ void run_cuda(const Config& cfg, Control& ctrl) {
 
     // seed детерминирован (cfg.seed, CLI --seed) и согласован с CPU-бэкендом.
     unsigned long long seed = cfg.seed;
-    unsigned long long brute_base = 0;
+    Counter brute_base = counter_from_u64(0);
 
     while (!ctrl.stop.load(std::memory_order_relaxed)) {
         if (cfg.mode == Mode::Random) {
@@ -150,10 +160,14 @@ void run_cuda(const Config& cfg, Control& ctrl) {
                 d_found);
             seed += total_threads;
         } else {
+            const uint64_t base_lo = counter_lo(brute_base);
+            const uint64_t base_hi = counter_hi(brute_base);
             brute_kernel<<<blocks, kThreadsPerBlock>>>(
-                d_target, cfg.len, cfg.n, brute_base, total_threads,
+                d_target, cfg.len, cfg.n, base_lo, base_hi, total_threads,
                 iters_per_thread, d_attempts, d_found);
-            brute_base += total_threads * iters_per_thread;
+            const Counter stride =
+                counter_from_u64(total_threads) * iters_per_thread;
+            brute_base = brute_base + stride;
         }
         CUDA_OK(cudaGetLastError());
         CUDA_OK(cudaDeviceSynchronize());

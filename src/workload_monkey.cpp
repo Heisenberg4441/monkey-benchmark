@@ -12,12 +12,24 @@ void MonkeyWorkload::prepare(const Config& cfg) {
     n_ = cfg.n;
     len_ = cfg.len;
     target_ = cfg.target_idx;
+
+    // Определяем, влезает ли всё пространство в 64 бита.
+    if (mode_ == 1) {
+        const uint64_t base = static_cast<uint64_t>(n_);
+        Counter max_val = counter_from_u64(1);
+        for (int i = 0; i < len_; ++i) {
+            max_val = max_val * base;
+        }
+        max_val = max_val + counter_from_u64(static_cast<uint64_t>(-1)); // max_val -= 1
+        // Если hi == 0, всё пространство в 64 битах.
+        brute_fits_in_64_ = (counter_hi(max_val) == 0);
+    } else {
+        brute_fits_in_64_ = true;
+    }
 }
 
-void MonkeyWorkload::execute_batch(uint64_t counter_start, uint64_t batch_size,
+void MonkeyWorkload::execute_batch(Counter counter_start, uint64_t batch_size,
                                    WorkloadResult& out) const {
-    // Локальные копии в регистрах: ничего не пишем сквозь out-ссылку в горячем
-    // цикле (иначе компилятор перечитывает поля каждую итерацию).
     const int* target = target_.data();
     const int mode = mode_;
     const uint32_t seed = seed_;
@@ -25,13 +37,29 @@ void MonkeyWorkload::execute_batch(uint64_t counter_start, uint64_t batch_size,
     const int n = n_;
 
     uint64_t done = 0;
-    for (uint64_t i = 0; i < batch_size; ++i) {
-        const uint64_t c = counter_start + i;
-        ++done;
-        if (kernel::monkey_match(mode, seed, c, target, len, n)) {
-            out.solution_found = true;
-            out.solution_counter = c;
-            break;
+
+    if (mode == 1 && !brute_fits_in_64_) {
+        // 128-битный brute: каждый counter — число в базе n.
+        Counter c = counter_start;
+        for (uint64_t i = 0; i < batch_size; ++i) {
+            ++done;
+            if (kernel::monkey_match_brute_128(c, target, len, n)) {
+                out.solution_found = true;
+                out.solution_counter = c;
+                break;
+            }
+            c = c + counter_from_u64(1);
+        }
+    } else {
+        // 64-битный путь (random всегда, brute если помещается).
+        for (uint64_t i = 0; i < batch_size; ++i) {
+            const uint64_t c64 = counter_lo(counter_start) + i;
+            ++done;
+            if (kernel::monkey_match(mode, seed, c64, target, len, n)) {
+                out.solution_found = true;
+                out.solution_counter = counter_from_u64(c64);
+                break;
+            }
         }
     }
     out.iterations += done;
@@ -55,26 +83,32 @@ bool MonkeyWorkload::verify() const {
 
     // 2) brute: counter, кодирующий эталон, обязан совпасть; соседний — нет.
     if (mode_ == 1) {
-        uint64_t c = 0;
-        bool encodable = true;
         const uint64_t base = static_cast<uint64_t>(n_);
+        // Пытаемся закодировать эталон в Counter (128 бит).
+        Counter c = counter_from_u64(0);
         for (int p = 0; p < len_; ++p) {
-            const uint64_t d = static_cast<uint64_t>(target_[p]);
-            if (c > (UINT64_MAX - d) / base) { // переполнение uint64
-                encodable = false;
-                break;
-            }
-            c = c * base + d;
+            c = c * base;
+            c = c + counter_from_u64(static_cast<uint64_t>(target_[p]));
         }
-        if (encodable) {
-            if (!kernel::monkey_match(1, seed_, c, target_.data(), len_, n_)) {
+
+        if (brute_fits_in_64_) {
+            const uint64_t c64 = counter_lo(c);
+            if (!kernel::monkey_match(1, seed_, c64, target_.data(), len_, n_)) {
                 return false;
             }
-            // Соседний counter меняет последний разряд (если он не максимум) —
-            // совпадения быть не должно.
             if (target_[len_ - 1] != n_ - 1 &&
-                kernel::monkey_match(1, seed_, c + 1, target_.data(), len_, n_)) {
+                kernel::monkey_match(1, seed_, c64 + 1, target_.data(), len_, n_)) {
                 return false;
+            }
+        } else {
+            if (!kernel::monkey_match_brute_128(c, target_.data(), len_, n_)) {
+                return false;
+            }
+            if (target_[len_ - 1] != n_ - 1) {
+                const Counter next = c + counter_from_u64(1);
+                if (kernel::monkey_match_brute_128(next, target_.data(), len_, n_)) {
+                    return false;
+                }
             }
         }
     }
