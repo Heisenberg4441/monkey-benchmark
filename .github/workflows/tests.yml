@@ -1,7 +1,5 @@
 name: Tests
 
-# Лёгкий CI на каждый push/PR: сборка CPU-only + ctest, включая
-# cross-backend determinism test. Полная 3-OS матрица — в build.yml/Фазе 6.
 on:
   push:
     branches: [master, main]
@@ -10,36 +8,63 @@ on:
 
 jobs:
   test:
-    name: Build + ctest (ubuntu)
-    runs-on: ubuntu-latest
+    name: Build + ctest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Vulkan: loader + glslang для компиляции шейдера, mesa lavapipe как
-      # программный Vulkan-девайс, чтобы real-shader determinism test реально
-      # исполнял SPIR-V в CI без физического GPU.
-      - name: Install Vulkan + lavapipe
+      # Linux: Vulkan SDK + lavapipe для real-shader determinism test.
+      - name: Install Vulkan + lavapipe (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan-dev glslang-tools mesa-vulkan-drivers
 
+      # macOS: Vulkan SDK (MoltenVK) для real-shader test.
+      - name: Install Vulkan SDK (macOS)
+        if: runner.os == 'macOS'
+        run: brew install vulkan-headers vulkan-loader glslang molten-vk
+
       - name: Configure
         run: >
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          -DUSE_CUDA=OFF -DUSE_VULKAN=ON -DNATIVE_ARCH=OFF -DMONKEY_BUILD_TESTS=ON
+          -DUSE_CUDA=OFF -DUSE_VULKAN=ON -DMONKEY_NATIVE_ARCH=OFF
+          -DMONKEY_BUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build -j
 
-      - name: Run tests
+      - name: Run tests (Linux)
+        if: runner.os == 'Linux'
         working-directory: build
-        # lavapipe виден как VK_ICD; форсируем софт-девайс для детерминизма.
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: ctest --output-on-failure
 
+      - name: Run tests (macOS)
+        if: runner.os == 'macOS'
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        working-directory: build
+        run: ctest -C Release --output-on-failure
+
       - name: Smoke bench
+        shell: bash
         run: |
           printf 'abc' > /tmp/ref.txt
-          ./build/monkey_bench /tmp/ref.txt -d 2
+          ./build/monkey_bench /tmp/ref.txt -d 2 --warmup 0
+
+      - name: JSON output smoke
+        shell: bash
+        run: |
+          printf 'abc' > /tmp/ref.txt
+          ./build/monkey_bench /tmp/ref.txt -d 2 --warmup 0 --output-format json

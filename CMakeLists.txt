@@ -18,9 +18,10 @@ endif()
 # GPU-бэкенды включаются автоматически, если найден соответствующий SDK.
 option(USE_CUDA "Сборка с CUDA-бэкендом (NVIDIA)" ON)
 option(USE_VULKAN "Сборка с Vulkan-бэкендом (любой GPU)" ON)
-# -march=native даёт лучшую производительность локально, но делает бинарник
-# непортируемым. Для релизных сборок выключайте: -DNATIVE_ARCH=OFF.
-option(NATIVE_ARCH "Оптимизация под локальную микроархитектуру (-march=native)" ON)
+# -march=native только если явно включён (MONKEY_NATIVE_ARCH=ON).
+# По умолчанию сборка с переносимым baseline: бинарь запускается на машине,
+# отличной от build-хоста, без Illegal instruction.
+option(MONKEY_NATIVE_ARCH "Оптимизация под локальную микроархитектуру (-march=native)" OFF)
 # Юнит-тесты (Catch2). CPU-only, без GPU SDK — собираются в любом окружении.
 option(MONKEY_BUILD_TESTS "Сборка юнит-тестов (Catch2 + ctest)" ON)
 
@@ -123,7 +124,7 @@ if(MONKEY_BUILD_TESTS)
 endif()
 
 # -march=native только для нативных (не кросс, не релизных) сборок CPU.
-if(NATIVE_ARCH)
+if(MONKEY_NATIVE_ARCH)
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
     if(HAS_MARCH_NATIVE)

@@ -76,11 +76,11 @@ jobs:
       # зависеть от его наличия в PATH.
       - name: Configure (Windows)
         if: runner.os == 'Windows'
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNATIVE_ARCH=OFF -DCMAKE_CUDA_COMPILER="$env:CUDA_PATH\bin\nvcc.exe" ${{ matrix.cmake_cuda }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMONKEY_NATIVE_ARCH=OFF -DCMAKE_CUDA_COMPILER="$env:CUDA_PATH\bin\nvcc.exe" ${{ matrix.cmake_cuda }}
 
       - name: Configure (Unix)
         if: runner.os != 'Windows'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNATIVE_ARCH=OFF ${{ matrix.cmake_cuda }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMONKEY_NATIVE_ARCH=OFF ${{ matrix.cmake_cuda }}
 
       - name: Build
         run: cmake --build build --config Release
