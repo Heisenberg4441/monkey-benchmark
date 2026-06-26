@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MonkeyBench Output",
+  "description": "Output of a single benchmark run (--output-format json).",
+  "type": "object",
+  "required": [
+    "reference",
+    "alphabet_size",
+    "string_length",
+    "workload",
+    "mode",
+    "backend",
+    "total_time_s",
+    "total_attempts",
+    "solution_found",
+    "ops_per_sec"
+  ],
+  "properties": {
+    "reference": {
+      "type": "string",
+      "description": "Reference text (match target)."
+    },
+    "alphabet_size": {
+      "type": "integer",
+      "description": "Cardinality of the alphabet derived from the reference file.",
+      "minimum": 1
+    },
+    "string_length": {
+      "type": "integer",
+      "description": "Number of Unicode characters in the reference.",
+      "minimum": 1
+    },
+    "workload": {
+      "type": "string",
+      "description": "Workload identifier (monkey, bbp, miller-rabin)."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Operating mode (random or brute)."
+    },
+    "backend": {
+      "type": "string",
+      "description": "Execution backend (cpu, cuda, vulkan)."
+    },
+    "threads": {
+      "type": "integer",
+      "description": "Number of CPU threads used."
+    },
+    "batch_size": {
+      "type": "integer",
+      "description": "Batch size used."
+    },
+    "seed": {
+      "type": "integer",
+      "description": "PRNG seed."
+    },
+    "total_time_s": {
+      "type": "number",
+      "description": "Total wall-clock time of the measurement phase."
+    },
+    "total_attempts": {
+      "type": "integer",
+      "description": "Total number of candidates checked."
+    },
+    "solution_found": {
+      "type": "boolean",
+      "description": "Whether an exact match was found."
+    },
+    "ops_per_sec": {
+      "type": "object",
+      "description": "Sampled throughput statistics.",
+      "required": [
+        "min",
+        "median",
+        "mean",
+        "p95",
+        "p99",
+        "max",
+        "stddev",
+        "cv"
+      ],
+      "properties": {
+        "min": {
+          "type": "integer",
+          "description": "Minimum sample."
+        },
+        "median": {
+          "type": "integer",
+          "description": "Median sample."
+        },
+        "mean": {
+          "type": "number",
+          "description": "Arithmetic mean."
+        },
+        "p95": {
+          "type": "integer",
+          "description": "95th percentile."
+        },
+        "p99": {
+          "type": "integer",
+          "description": "99th percentile."
+        },
+        "max": {
+          "type": "integer",
+          "description": "Maximum sample."
+        },
+        "stddev": {
+          "type": "number",
+          "description": "Standard deviation."
+        },
+        "cv": {
+          "type": "number",
+          "description": "Coefficient of variation (stddev / mean)."
+        }
+      }
+    }
+  }
+}

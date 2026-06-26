@@ -127,6 +127,8 @@ The prebuilt release binaries for Windows and Linux already include **both** CUD
 | `--gpu-api <auto\|cuda\|vulkan>` | GPU API. Default `auto` (NVIDIA → CUDA, else Vulkan). Force a backend to compare them on the same card. |
 | `-t`, `--threads <N>` | Number of CPU threads. Default: all cores. |
 | `-d`, `--duration <sec>` | Stop after N seconds (benchmark mode). |
+| `--warmup <sec>` | Stabilisation time before measurement (default: 2 sec). |
+| `--output-format <text\|json>` | Output format. Default `text`. `json` for CI / leaderboard. |
 | `--seed <N>` | Seed for the counter-based PRNG (reproducible runs). Default: fixed constant. |
 | `--batch-size <N>` | Hot-loop iterations between counter syncs (CPU flush interval; GPU iters/thread per dispatch). Default: 8192. |
 | `-h`, `--help` | Argument help. |
@@ -146,18 +148,31 @@ The `-all` mode runs the CPU and GPU backends simultaneously and reports combine
 
 ---
 
-## Locale Benchmark Methodology
+## Measurement Methodology
 
-A key use case is comparing how a platform handles different entropy at a fixed string length. Prepare a set of files of equal length but from different writing systems and compare the Ops/sec.
+Every benchmark run goes through two phases:
+
+1. **Warmup** (`--warmup <sec>`, default 2 s). Workers run at full load but no samples are recorded. This lets CPU frequency governors, GPU clocks, and caches stabilise.
+2. **Measurement** (`--duration <sec>`). The reporter samples Ops/sec every **100 ms**. The sample is computed as `Δattempts / Δtime` over the interval, not as a cumulative average — this captures transient throughput, not a smoothed figure that hides noise.
+3. After the measurement window, the sample vector yields **min, median, mean, p95, p99, max, standard deviation, and the coefficient of variation (CV)**.
+4. If CV > 5% the tool emits a warning: the measurement is likely disturbed by thermal throttling, background load, or GPU power-state transitions.
+
+JSON output (`--output-format json`) includes all statistics in a structured format validated against [`bench_output.schema.json`](bench_output.schema.json). This is the canonical format for CI ingestion and the planned leaderboard.
+
+**Reproducibility.** Every run with the same `--seed` and identical reference / workload / batch-size produces the same sequence of PRNG outputs and therefore the same counter trajectory. The seed is fixed by default (`0x9e3779b9`).
+
+## Locale Benchmark Notes
+
+A common use case is comparing how a platform handles locales with different alphabet cardinalities and per-character byte widths. Prepare reference files of equal character length from different writing systems.
 
 Example references of 5–10 characters:
 
-| File | Content | Script | Bytes per char |
-| --- | --- | --- | --- |
-| `en.txt` | `HelloWorld` | Latin | 1 |
-| `ru.txt` | `ПриветМир` | Cyrillic | 2 |
-| `jp.txt` | `日本語テスト` | Kanji/Kana | 3 |
-| `emoji.txt` | `🚀🌍💡🔥💻` | Emoji | 4 |
+| File | Content | Script | Alphabet size | Bytes per char |
+| --- | --- | --- | --- | --- |
+| `en.txt` | `HelloWorld` | Latin | ~26 | 1 |
+| `ru.txt` | `ПриветМир` | Cyrillic | ~33 | 2 |
+| `jp.txt` | `日本語テスト` | Kanji/Kana | large | 3 |
+| `emoji.txt` | `🚀🌍💡🔥💻` | Emoji | large | 4 |
 
 Run in `random` mode with a fixed measurement window for each file:
 
@@ -168,7 +183,7 @@ Run in `random` mode with a fixed measurement window for each file:
 ./build/monkey_bench emoji.txt -m random -d 10
 ```
 
-At equal string length, throughput typically drops as alphabet cardinality and per-character byte size grow: the random sampling range widens, and comparing multi-byte characters requires more memory work.
+**Important.** Absolute Ops/sec values for *different* reference files are NOT directly comparable — alphabet cardinality, bytes-per-character, and string-length-in-bytes all differ simultaneously. The correct comparison is **relative**: compare CPU vs GPU on the *same* file, or observe how a single platform's throughput degrades as the reference grows. Cross-platform localisation methodology is being formalised in [Future Work](#vision--roadmap).
 
 ---
 
@@ -227,7 +242,7 @@ Planned directions:
 ## Limitations
 
 - In `random` mode, finding an exact match for long or high-entropy strings is practically unreachable: the expected time grows as `N^L`. To verify correctness (that it actually stops on a match), use short strings of 3–5 characters.
-- `brute` mode is deterministic, but the `N^L` space quickly exceeds the range of a 64-bit index; very long strings require an extended-precision index.
+- `brute` mode uses a 128-bit index (portable `Counter` type, `__uint128_t` on GCC/Clang, custom on MSVC/CUDA), so spaces up to ~3.4×10³⁸ candidates are supported.
 
 ---
 

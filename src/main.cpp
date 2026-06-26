@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -37,8 +38,9 @@ std::vector<std::string> split_utf8(const std::string& str) {
 
 namespace {
 
-// Какой GPU-API использовать. Auto: NVIDIA -> CUDA, иначе -> Vulkan.
 enum class GpuApi { Auto, Cuda, Vulkan };
+
+enum class OutputFormat { Text, Json };
 
 struct Args {
     std::string file;
@@ -47,10 +49,12 @@ struct Args {
     GpuApi gpu_api = GpuApi::Auto;
     unsigned threads = 0;
     double duration = 0.0;
+    double warmup = 2.0;
     uint32_t seed = 0x9e3779b9u;
     bool seed_set = false;
     uint64_t batch_size = 8192;
     WorkloadType workload = WorkloadType::Monkey;
+    OutputFormat output_format = OutputFormat::Text;
 };
 
 void print_help(const char* prog) {
@@ -65,12 +69,13 @@ void print_help(const char* prog) {
         "      --gpu-api <auto|cuda|vulkan>  выбор GPU-API (default: auto)\n"
         "  -t, --threads <N>             число CPU-потоков (default: auto)\n"
         "  -d, --duration <sec>          остановиться через N секунд (бенчмарк)\n"
+        "      --warmup <sec>            время стабилизации перед замером (default: 2)\n"
+        "      --output-format <text|json>  вывод в JSON для CI (default: text)\n"
         "      --seed <N>                seed counter-based PRNG (воспроизводимость)\n"
         "      --batch-size <N>          гранулярность синка счётчика (default: 8192)\n"
         "  -h, --help                    показать эту справку\n";
 }
 
-// Возвращает значение опции: либо часть после '=', либо следующий аргумент.
 bool take_value(int argc, char** argv, int& i, const std::string& arg,
                 std::string& out) {
     auto eq = arg.find('=');
@@ -132,6 +137,18 @@ bool parse_args(int argc, char** argv, Args& args) {
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
             args.duration = std::strtod(v.c_str(), nullptr);
         }
+        else if (key == "--warmup") {
+            std::string v;
+            if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
+            args.warmup = std::strtod(v.c_str(), nullptr);
+        }
+        else if (key == "--output-format") {
+            std::string v;
+            if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
+            if (v == "json") args.output_format = OutputFormat::Json;
+            else if (v == "text") args.output_format = OutputFormat::Text;
+            else { std::cerr << "Неизвестный формат вывода: " << v << "\n"; return false; }
+        }
         else if (key == "--seed") {
             std::string v;
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
@@ -162,6 +179,119 @@ const char* backend_name(Backend b) {
     return b == Backend::Cpu ? "cpu" : (b == Backend::Gpu ? "gpu" : "all");
 }
 
+// Один сэмпл Ops/sec: момент времени + мгновенная скорость.
+struct Sample {
+    double elapsed;
+    double ops_per_sec;
+};
+
+// Статистики по набору сэмплов.
+struct Stats {
+    double min = 0;
+    double median = 0;
+    double mean = 0;
+    double p95 = 0;
+    double p99 = 0;
+    double max = 0;
+    double stddev = 0;
+    double cv = 0; // coefficient of variation: stddev / mean
+};
+
+Stats compute_stats(std::vector<Sample>& samples) {
+    if (samples.empty()) return {};
+    const size_t n = samples.size();
+
+    std::sort(samples.begin(), samples.end(),
+              [](const Sample& a, const Sample& b) { return a.ops_per_sec < b.ops_per_sec; });
+
+    Stats s;
+    s.min = samples.front().ops_per_sec;
+    s.max = samples.back().ops_per_sec;
+
+    const size_t p95_idx = static_cast<size_t>(n * 0.95);
+    const size_t p99_idx = static_cast<size_t>(n * 0.99);
+    s.p95 = samples[p95_idx < n ? p95_idx : n - 1].ops_per_sec;
+    s.p99 = samples[p99_idx < n ? p99_idx : n - 1].ops_per_sec;
+    s.median = samples[n / 2].ops_per_sec;
+
+    double sum = 0;
+    for (const auto& sp : samples) sum += sp.ops_per_sec;
+    s.mean = sum / static_cast<double>(n);
+
+    double sq = 0;
+    for (const auto& sp : samples) {
+        const double d = sp.ops_per_sec - s.mean;
+        sq += d * d;
+    }
+    s.stddev = std::sqrt(sq / static_cast<double>(n));
+    s.cv = s.mean > 0 ? s.stddev / s.mean : 0;
+
+    return s;
+}
+
+void print_stats(const Stats& s) {
+    std::cout << "\n--- Статистика Ops/sec (" << s.mean << ") ---\n";
+    std::cout << "  min:    " << static_cast<long long>(s.min) << "\n";
+    std::cout << "  median: " << static_cast<long long>(s.median) << "\n";
+    std::cout << "  mean:   " << static_cast<long long>(s.mean) << "\n";
+    std::cout << "  p95:    " << static_cast<long long>(s.p95) << "\n";
+    std::cout << "  p99:    " << static_cast<long long>(s.p99) << "\n";
+    std::cout << "  max:    " << static_cast<long long>(s.max) << "\n";
+    std::cout << "  stddev: " << static_cast<long long>(s.stddev) << "\n";
+    std::cout << "  CV:     " << (s.cv * 100.0) << "%\n";
+    if (s.cv > 0.05) {
+        std::cerr << "[warn] CV > 5% — измерение нестабильно (термал/фон?)\n";
+    }
+}
+
+void print_json(const std::string& reference, const Config& cfg, const char* gpu_label,
+                bool use_cpu, bool use_gpu, double total_time, uint64_t total_attempts,
+                const Stats& s, bool solution_found) {
+    // Minimal JSON string escaping.
+    auto json_escape = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out += c;
+            }
+        }
+        return out;
+    };
+    std::cout << "{\n";
+    std::cout << "  \"reference\": \"" << json_escape(reference) << "\",\n";
+    std::cout << "  \"alphabet_size\": " << cfg.n << ",\n";
+    std::cout << "  \"string_length\": " << cfg.len << ",\n";
+    std::cout << "  \"workload\": \"" << workload_name(cfg.workload) << "\",\n";
+    std::cout << "  \"mode\": \"" << mode_name(cfg.mode) << "\",\n";
+    std::cout << "  \"backend\": \""
+              << (use_cpu && use_gpu ? std::string("cpu+") + gpu_label
+                                    : (use_gpu ? gpu_label : "cpu"))
+              << "\",\n";
+    std::cout << "  \"threads\": " << (cfg.threads > 0 ? cfg.threads : std::thread::hardware_concurrency()) << ",\n";
+    std::cout << "  \"batch_size\": " << cfg.batch_size << ",\n";
+    std::cout << "  \"seed\": " << cfg.seed << ",\n";
+    std::cout << "  \"total_time_s\": " << total_time << ",\n";
+    std::cout << "  \"total_attempts\": " << total_attempts << ",\n";
+    std::cout << "  \"solution_found\": " << (solution_found ? "true" : "false") << ",\n";
+    std::cout << "  \"ops_per_sec\": {\n";
+    std::cout << "    \"min\": " << static_cast<long long>(s.min) << ",\n";
+    std::cout << "    \"median\": " << static_cast<long long>(s.median) << ",\n";
+    std::cout << "    \"mean\": " << static_cast<long long>(s.mean) << ",\n";
+    std::cout << "    \"p95\": " << static_cast<long long>(s.p95) << ",\n";
+    std::cout << "    \"p99\": " << static_cast<long long>(s.p99) << ",\n";
+    std::cout << "    \"max\": " << static_cast<long long>(s.max) << ",\n";
+    std::cout << "    \"stddev\": " << static_cast<long long>(s.stddev) << ",\n";
+    std::cout << "    \"cv\": " << s.cv << "\n";
+    std::cout << "  }\n";
+    std::cout << "}\n";
+}
+
 } // namespace
 
 int run(int argc, char** argv) {
@@ -176,7 +306,6 @@ int run(int argc, char** argv) {
     std::string reference((std::istreambuf_iterator<char>(file)),
                           std::istreambuf_iterator<char>());
     file.close();
-    // Отбрасываем завершающий перевод строки, частый артефакт текстовых файлов.
     while (!reference.empty() && (reference.back() == '\n' || reference.back() == '\r'))
         reference.pop_back();
     if (reference.empty()) { std::cerr << "Ошибка: файл пуст!\n"; return 1; }
@@ -186,7 +315,6 @@ int run(int argc, char** argv) {
     std::sort(alphabet.begin(), alphabet.end());
     alphabet.erase(std::unique(alphabet.begin(), alphabet.end()), alphabet.end());
 
-    // Сворачиваем эталон к индексам символов в алфавите.
     std::map<std::string, int> index;
     for (size_t i = 0; i < alphabet.size(); ++i) index[alphabet[i]] = static_cast<int>(i);
 
@@ -204,7 +332,6 @@ int run(int argc, char** argv) {
     cfg.batch_size = args.batch_size;
     cfg.workload = args.workload;
 
-    // Допуск workload'а в бенч: prepare + verify (обязательно по контракту).
     {
         auto wl = make_workload(cfg);
         if (!wl) {
@@ -220,11 +347,9 @@ int run(int argc, char** argv) {
         }
     }
 
-    // Разрешаем фактически используемые бэкенды с откатом на CPU.
     bool use_cpu = (cfg.backend == Backend::Cpu || cfg.backend == Backend::All);
     bool use_gpu = (cfg.backend == Backend::Gpu || cfg.backend == Backend::All);
 
-    // Выбор GPU-API: NVIDIA -> CUDA, иначе -> Vulkan (любой GPU).
     void (*gpu_fn)(const Config&, Control&) = nullptr;
     const char* gpu_label = "";
     if (use_gpu) {
@@ -242,39 +367,80 @@ int run(int argc, char** argv) {
         }
     }
 
-    std::cout << "Эталон:           " << reference << "\n";
-    std::cout << "Длина (символов): " << cfg.len << "\n";
-    std::cout << "Размер алфавита:  " << cfg.n << "\n";
-    std::cout << "Workload:         " << workload_name(cfg.workload) << "\n";
-    std::cout << "Режим:            " << mode_name(cfg.mode) << "\n";
-    std::cout << "Бэкенд:           " << backend_name(cfg.backend)
-              << (use_cpu && use_gpu ? std::string(" (cpu+") + gpu_label + ")"
-                                     : (use_gpu ? std::string(" (") + gpu_label + ")" : std::string(" (cpu)"))) << "\n";
-    if (args.seed_set) std::cout << "Seed PRNG:        " << cfg.seed << "\n";
-    if (cfg.duration > 0) std::cout << "Лимит времени:    " << cfg.duration << " c\n";
-    std::cout << "\n";
+    if (args.output_format == OutputFormat::Text) {
+        std::cout << "Эталон:           " << reference << "\n";
+        std::cout << "Длина (символов): " << cfg.len << "\n";
+        std::cout << "Размер алфавита:  " << cfg.n << "\n";
+        std::cout << "Workload:         " << workload_name(cfg.workload) << "\n";
+        std::cout << "Режим:            " << mode_name(cfg.mode) << "\n";
+        std::cout << "Бэкенд:           " << backend_name(cfg.backend)
+                  << (use_cpu && use_gpu ? std::string(" (cpu+") + gpu_label + ")"
+                                         : (use_gpu ? std::string(" (") + gpu_label + ")" : std::string(" (cpu)"))) << "\n";
+        if (args.seed_set) std::cout << "Seed PRNG:        " << cfg.seed << "\n";
+        if (cfg.duration > 0) std::cout << "Лимит времени:    " << cfg.duration << " c\n";
+        if (args.warmup > 0) std::cout << "Прогрев:          " << args.warmup << " c\n";
+        std::cout << "\n";
+    }
 
+    // --- Warmup фиксация измерений ------------------------------------------
+    if (args.warmup > 0) {
+        Control warm_ctrl;
+        auto warm_start = std::chrono::high_resolution_clock::now();
+
+        std::thread w_cpu, w_gpu;
+        if (use_cpu) w_cpu = std::thread(run_cpu, std::cref(cfg), std::ref(warm_ctrl));
+        if (use_gpu) w_gpu = std::thread(gpu_fn, std::cref(cfg), std::ref(warm_ctrl));
+
+        while (!warm_ctrl.stop.load(std::memory_order_acquire)) {
+            double elapsed = std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - warm_start).count();
+            if (elapsed >= args.warmup)
+                warm_ctrl.stop.store(true, std::memory_order_release);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (w_cpu.joinable()) w_cpu.join();
+        if (w_gpu.joinable()) w_gpu.join();
+    }
+
+    // --- Измерение --------------------------------------------------------
     Control ctrl;
-    auto start = std::chrono::high_resolution_clock::now();
+    auto measure_start = std::chrono::high_resolution_clock::now();
 
     std::thread cpu_thr, gpu_thr;
     if (use_cpu) cpu_thr = std::thread(run_cpu, std::cref(cfg), std::ref(ctrl));
     if (use_gpu) gpu_thr = std::thread(gpu_fn, std::cref(cfg), std::ref(ctrl));
 
-    // Репортер в главном потоке.
+    // Сэмплирование Ops/sec каждые ~100 мс.
+    constexpr auto kSampleInterval = std::chrono::milliseconds(100);
+    std::vector<Sample> samples;
+    unsigned long long prev_total = 0;
+    auto prev_sample_time = measure_start;
+
     while (!ctrl.stop.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        double elapsed = std::chrono::duration<double>(
-            std::chrono::high_resolution_clock::now() - start).count();
+        std::this_thread::sleep_for(kSampleInterval);
+        auto now = std::chrono::high_resolution_clock::now();
+        double elapsed = std::chrono::duration<double>(now - measure_start).count();
         unsigned long long cpu_a = ctrl.cpu_counters.total();
         unsigned long long gpu_a = ctrl.gpu_attempts.load(std::memory_order_relaxed);
         unsigned long long total = cpu_a + gpu_a;
-        long long rate = elapsed > 0 ? static_cast<long long>(total / elapsed) : 0;
-        std::cout << "Прошло: " << elapsed << "c | Попыток: " << total
-                  << " | Скорость: " << rate << " оп/с";
-        if (use_cpu && use_gpu)
-            std::cout << " (cpu " << cpu_a << " / gpu " << gpu_a << ")";
-        std::cout << "          \r" << std::flush;
+
+        double sample_elapsed = std::chrono::duration<double>(now - prev_sample_time).count();
+        if (sample_elapsed > 0) {
+            long long sample_attempts = static_cast<long long>(total - prev_total);
+            double rate = static_cast<double>(sample_attempts) / sample_elapsed;
+            samples.push_back({elapsed, rate});
+        }
+        prev_total = total;
+        prev_sample_time = now;
+
+        if (args.output_format == OutputFormat::Text) {
+            long long avg_rate = elapsed > 0 ? static_cast<long long>(total / elapsed) : 0;
+            std::cout << "\rПрошло: " << elapsed << "c | Попыток: " << total
+                      << " | Скорость: " << avg_rate << " оп/с";
+            if (use_cpu && use_gpu)
+                std::cout << " (cpu " << cpu_a << " / gpu " << gpu_a << ")";
+            std::cout << "          " << std::flush;
+        }
 
         if (cfg.duration > 0 && elapsed >= cfg.duration)
             ctrl.stop.store(true, std::memory_order_release);
@@ -284,17 +450,27 @@ int run(int argc, char** argv) {
     if (gpu_thr.joinable()) gpu_thr.join();
 
     double total_time = std::chrono::duration<double>(
-        std::chrono::high_resolution_clock::now() - start).count();
-    unsigned long long total = ctrl.cpu_counters.total() + ctrl.gpu_attempts.load();
+        std::chrono::high_resolution_clock::now() - measure_start).count();
+    uint64_t total_attempts = ctrl.cpu_counters.total() + ctrl.gpu_attempts.load();
+    bool solution_found = ctrl.found.load();
 
-    std::cout << "\n\n";
-    if (ctrl.found.load()) std::cout << "=== СОВПАДЕНИЕ НАЙДЕНО ===\n";
-    else std::cout << "=== ОСТАНОВКА ПО ЛИМИТУ ВРЕМЕНИ ===\n";
-    std::cout << "Время:           " << total_time << " c\n";
-    std::cout << "Всего попыток:   " << total << "\n";
-    std::cout << "Средняя скорость: "
-              << (total_time > 0 ? static_cast<long long>(total / total_time) : 0)
-              << " оп/с\n";
+    Stats stats = compute_stats(samples);
+
+    if (args.output_format == OutputFormat::Json) {
+        print_json(reference, cfg, gpu_label, use_cpu, use_gpu,
+                   total_time, total_attempts, stats, solution_found);
+    } else {
+        std::cout << "\n\n";
+        if (solution_found) std::cout << "=== СОВПАДЕНИЕ НАЙДЕНО ===\n";
+        else std::cout << "=== ОСТАНОВКА ПО ЛИМИТУ ВРЕМЕНИ ===\n";
+        std::cout << "Время:           " << total_time << " c\n";
+        std::cout << "Всего попыток:   " << total_attempts << "\n";
+        std::cout << "Средняя скорость: "
+                  << (total_time > 0 ? static_cast<long long>(total_attempts / total_time) : 0)
+                  << " оп/с\n";
+        if (!samples.empty()) print_stats(stats);
+    }
+
     return 0;
 }
 
@@ -302,7 +478,6 @@ int run(int argc, char** argv) {
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
-    // Вывод в UTF-8 без необходимости вручную делать `chcp 65001`.
     SetConsoleOutputCP(CP_UTF8);
 #endif
     return monkey::run(argc, argv);
