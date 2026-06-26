@@ -1,5 +1,6 @@
 #include "workload.h"
 
+#include "workload_extra.h"
 #include "workload_monkey.h"
 
 namespace monkey {
@@ -21,8 +22,9 @@ std::unique_ptr<IWorkload> make_workload(const Config& cfg) {
     case WorkloadType::Monkey:
         return std::make_unique<MonkeyWorkload>();
     case WorkloadType::Bbp:
+        return std::make_unique<BBPPiWorkload>();
     case WorkloadType::MillerRabin:
-        return nullptr; // реализуются в следующих коммитах Фазы 3
+        return std::make_unique<MillerRabinWorkload>();
     }
     return nullptr;
 }

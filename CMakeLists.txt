@@ -32,7 +32,8 @@ find_package(Threads REQUIRED)
 # header-only ядра (__host__ __device__) в src/workloads/.
 add_library(monkey_workloads STATIC
     src/workload.cpp
-    src/workload_monkey.cpp)
+    src/workload_monkey.cpp
+    src/workload_extra.cpp)
 target_include_directories(monkey_workloads PUBLIC src)
 
 # --- Базовый таргет (CPU всегда) -------------------------------------------

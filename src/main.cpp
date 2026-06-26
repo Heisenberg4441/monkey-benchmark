@@ -62,7 +62,7 @@ void print_help(const char* prog) {
         "Infinite Monkey Benchmark\n\n"
         "Использование:\n  " << prog << " [OPTIONS] <reference_file>\n\n"
         "Опции:\n"
-        "  -w, --workload <monkey>       что считать (default: monkey)\n"
+        "  -w, --workload <monkey|bbp|miller-rabin>  что считать (default: monkey)\n"
         "  -m, --mode <random|brute>     режим работы (default: random)\n"
         "  -b, --backend <cpu|gpu|all>   целевая нагрузка (default: cpu)\n"
         "      -cpu | -gpu | -all        короткие алиасы для --backend\n"
@@ -105,6 +105,8 @@ bool parse_args(int argc, char** argv, Args& args) {
             std::string v;
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
             if (v == "monkey") args.workload = WorkloadType::Monkey;
+            else if (v == "bbp") args.workload = WorkloadType::Bbp;
+            else if (v == "miller-rabin") args.workload = WorkloadType::MillerRabin;
             else { std::cerr << "Неизвестный workload: " << v << "\n"; return false; }
         }
         else if (key == "-m" || key == "--mode") {
