@@ -1,4 +1,5 @@
 #include "backend.h"
+#include "workload.h"
 
 #include <algorithm>
 #include <chrono>
@@ -49,6 +50,7 @@ struct Args {
     uint32_t seed = 0x9e3779b9u;
     bool seed_set = false;
     uint64_t batch_size = 8192;
+    WorkloadType workload = WorkloadType::Monkey;
 };
 
 void print_help(const char* prog) {
@@ -56,6 +58,7 @@ void print_help(const char* prog) {
         "Infinite Monkey Benchmark\n\n"
         "Использование:\n  " << prog << " [OPTIONS] <reference_file>\n\n"
         "Опции:\n"
+        "  -w, --workload <monkey>       что считать (default: monkey)\n"
         "  -m, --mode <random|brute>     режим работы (default: random)\n"
         "  -b, --backend <cpu|gpu|all>   целевая нагрузка (default: cpu)\n"
         "      -cpu | -gpu | -all        короткие алиасы для --backend\n"
@@ -93,6 +96,12 @@ bool parse_args(int argc, char** argv, Args& args) {
         else if (a == "-cpu") args.backend = Backend::Cpu;
         else if (a == "-gpu") args.backend = Backend::Gpu;
         else if (a == "-all") args.backend = Backend::All;
+        else if (key == "-w" || key == "--workload") {
+            std::string v;
+            if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
+            if (v == "monkey") args.workload = WorkloadType::Monkey;
+            else { std::cerr << "Неизвестный workload: " << v << "\n"; return false; }
+        }
         else if (key == "-m" || key == "--mode") {
             std::string v;
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
@@ -193,6 +202,23 @@ int run(int argc, char** argv) {
     cfg.duration = args.duration;
     cfg.seed = args.seed;
     cfg.batch_size = args.batch_size;
+    cfg.workload = args.workload;
+
+    // Допуск workload'а в бенч: prepare + verify (обязательно по контракту).
+    {
+        auto wl = make_workload(cfg);
+        if (!wl) {
+            std::cerr << "Ошибка: workload '" << workload_name(cfg.workload)
+                      << "' ещё не реализован\n";
+            return 1;
+        }
+        wl->prepare(cfg);
+        if (!wl->verify()) {
+            std::cerr << "Ошибка: verify() workload'а '" << wl->name()
+                      << "' не прошёл — бенч не запущен\n";
+            return 1;
+        }
+    }
 
     // Разрешаем фактически используемые бэкенды с откатом на CPU.
     bool use_cpu = (cfg.backend == Backend::Cpu || cfg.backend == Backend::All);
@@ -219,6 +245,7 @@ int run(int argc, char** argv) {
     std::cout << "Эталон:           " << reference << "\n";
     std::cout << "Длина (символов): " << cfg.len << "\n";
     std::cout << "Размер алфавита:  " << cfg.n << "\n";
+    std::cout << "Workload:         " << workload_name(cfg.workload) << "\n";
     std::cout << "Режим:            " << mode_name(cfg.mode) << "\n";
     std::cout << "Бэкенд:           " << backend_name(cfg.backend)
               << (use_cpu && use_gpu ? std::string(" (cpu+") + gpu_label + ")"

@@ -9,7 +9,7 @@ target_compile_definitions(catch_main PUBLIC CATCH_CONFIG_FAST_COMPILE)
 # Хелпер для регистрации тест-бинаря: линкует Catch2, видит src/, ctest-таргет.
 function(monkey_add_test name)
     add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE catch_main Threads::Threads)
+    target_link_libraries(${name} PRIVATE catch_main Threads::Threads monkey_workloads)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
@@ -18,6 +18,7 @@ monkey_add_test(test_sanity test_sanity.cpp)
 monkey_add_test(test_philox test_philox.cpp)
 monkey_add_test(test_glsl_philox test_glsl_philox.cpp)
 monkey_add_test(test_counters test_counters.cpp)
+monkey_add_test(test_workload_monkey test_workload_monkey.cpp)
 
 # --- Слой 2: реальный прогон SPIR-V на Vulkan-устройстве --------------------
 # Собирается только если есть Vulkan SDK и компилятор GLSL. В рантайме тест сам

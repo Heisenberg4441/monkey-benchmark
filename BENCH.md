@@ -81,3 +81,43 @@ number of iterations".
 Not measured here (no NVIDIA GPU on the test machine). The change — shared-memory
 block reduction with one global `atomicAdd` per block instead of one per thread —
 will be measured on a CUDA device in Phase 6 CI / on hardware and appended here.
+
+## Phase 3 — Pluggable workload abstraction
+
+Same machine as Phase 2. The CPU backend was refactored from a hardcoded
+`random_worker`/`brute_worker` to a generic worker driving an `IWorkload`
+(`execute_batch(counter_start, batch_size, result)`). The monkey logic moved
+into `MonkeyWorkload`, now fully counter-based (each global counter maps to one
+candidate via Philox; threads take disjoint counter ranges).
+
+### Monkey throughput: before (Phase 2) vs after (Phase 3 abstraction)
+
+Single thread, `random`, `"The quick brown fox…"`, `-d 2`, back-to-back,
+CPU-only builds:
+
+| Build | Ops/sec |
+| --- | --- |
+| Phase 2 (`random_worker`, free function)     | ~151 M |
+| Phase 3 (`MonkeyWorkload::execute_batch`)    | ~127 M |
+
+**Honest finding: a ~16% regression on monkey-`random`, and only there.**
+- `brute` mode is unaffected (~1.34 M both) — same loop structure, no PRNG.
+- The Philox math is byte-identical between the two (verified: with matched
+  counter packing and a single thread, both call `philox4x32_10` with the same
+  inputs), so this is **not** an algorithmic change — it is instruction
+  scheduling / register allocation around the uint64-counter virtual-workload
+  path under Apple clang on arm64. The regression reproduces single-threaded,
+  so it is per-candidate codegen, not contention or threading.
+
+Things tried that did **not** recover it (ruling out the obvious causes):
+accumulating `iterations` in a register instead of through the `out&` reference;
+manually inlining the random path to drop the `monkey_match` call and `mode`
+branch; matching the Phase 2 Philox counter layout exactly (`{cand,pos,0,0}`).
+All stayed at ~127 M.
+
+**Decision.** Accepted as the cost of the abstraction on this microarchitecture.
+The pluggable interface is the deliverable of Phase 3 and the enabler for the
+heavy compute workloads (BBP, Miller-Rabin) where per-op cost dwarfs this delta;
+`brute` (the search the project is named for) is unchanged. The delta is
+arm64/Apple-clang-specific and untested on x86 — Phase 6 CI re-measures on
+`x86-64-v3` and the result will be appended here before claiming parity.

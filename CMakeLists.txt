@@ -26,9 +26,17 @@ option(MONKEY_BUILD_TESTS "Сборка юнит-тестов (Catch2 + ctest)" 
 
 find_package(Threads REQUIRED)
 
+# --- Workloads (что считает бенч) ------------------------------------------
+# Статическая библиотека, общая для бинаря и тестов: реализации IWorkload и
+# header-only ядра (__host__ __device__) в src/workloads/.
+add_library(monkey_workloads STATIC
+    src/workload.cpp
+    src/workload_monkey.cpp)
+target_include_directories(monkey_workloads PUBLIC src)
+
 # --- Базовый таргет (CPU всегда) -------------------------------------------
 add_executable(monkey_bench src/main.cpp src/cpu_backend.cpp)
-target_link_libraries(monkey_bench PRIVATE Threads::Threads)
+target_link_libraries(monkey_bench PRIVATE Threads::Threads monkey_workloads)
 
 # --- CUDA-бэкенд ------------------------------------------------------------
 include(CheckLanguage)

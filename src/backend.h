@@ -11,6 +11,7 @@ namespace monkey {
 
 enum class Mode { Random, Brute };
 enum class Backend { Cpu, Gpu, All };
+enum class WorkloadType { Monkey, Bbp, MillerRabin };
 
 // Полностью разобранная задача. Сравнение свёрнуто к индексам символов в
 // алфавите: target_idx[i] — позиция i-го символа эталона в alphabet. Это
@@ -26,6 +27,7 @@ struct Config {
     double duration = 0.0;               // лимит в секундах (0 => до совпадения)
     uint32_t seed = 0x9e3779b9u;         // seed counter-based PRNG (CLI --seed)
     uint64_t batch_size = 8192;          // гранулярность синка счётчика (CLI --batch-size)
+    WorkloadType workload = WorkloadType::Monkey; // что считаем (CLI --workload)
 };
 
 // Общее состояние, разделяемое между бэкендами и репортером.
@@ -34,6 +36,7 @@ struct Control {
     std::atomic<bool> stop{false};
     AttemptCounters cpu_counters;        // per-thread снимки (без contention)
     std::atomic<unsigned long long> gpu_attempts{0};
+    std::atomic<unsigned long long> checksum{0}; // агрегат результата (антидот DCE)
 };
 
 // Разбиение UTF-8 строки на отдельные символы.

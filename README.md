@@ -120,7 +120,8 @@ The prebuilt release binaries for Windows and Linux already include **both** CUD
 
 | Option | Description |
 | --- | --- |
-| `-m`, `--mode <random\|brute>` | Operating mode. Default: `random`. |
+| `-w`, `--workload <monkey>` | What to compute. Default: `monkey`. More workloads (`bbp`, `miller-rabin`) are being added. |
+| `-m`, `--mode <random\|brute>` | Operating mode (monkey workload). Default: `random`. |
 | `-b`, `--backend <cpu\|gpu\|all>` | Target load. Default: `cpu`. |
 | `-cpu` / `-gpu` / `-all` | Short aliases for `--backend`. |
 | `--gpu-api <auto\|cuda\|vulkan>` | GPU API. Default `auto` (NVIDIA → CUDA, else Vulkan). Force a backend to compare them on the same card. |
