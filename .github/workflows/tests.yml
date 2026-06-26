@@ -31,31 +31,33 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install vulkan-headers vulkan-loader glslang molten-vk
 
-      - name: Configure
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DUSE_CUDA=OFF -DUSE_VULKAN=OFF -DMONKEY_NATIVE_ARCH=OFF
+          -DMONKEY_BUILD_TESTS=ON
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build -j
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
         run: >
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           -DUSE_CUDA=OFF -DUSE_VULKAN=ON -DMONKEY_NATIVE_ARCH=OFF
           -DMONKEY_BUILD_TESTS=ON
 
-      - name: Build
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
         run: cmake --build build -j
 
-      - name: Run tests (Linux)
-        if: runner.os == 'Linux'
+      - name: Run tests
         working-directory: build
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          VK_ICD_FILENAMES: ${{ runner.os == 'Linux' && '/usr/share/vulkan/icd.d/lvp_icd.x86_64.json' || '' }}
         run: ctest --output-on-failure
-
-      - name: Run tests (macOS)
-        if: runner.os == 'macOS'
-        working-directory: build
-        run: ctest --output-on-failure
-
-      - name: Run tests (Windows)
-        if: runner.os == 'Windows'
-        working-directory: build
-        run: ctest -C Release --output-on-failure
 
       - name: Smoke bench
         shell: bash
