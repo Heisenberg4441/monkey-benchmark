@@ -62,11 +62,11 @@ jobs:
       - name: Smoke bench
         shell: bash
         run: |
-          printf 'abc' > /tmp/ref.txt
-          ./build/monkey_bench /tmp/ref.txt -d 2 --warmup 0
+          printf 'abc' > ref.txt
+          ./build/monkey_bench ref.txt -d 2 --warmup 0
 
       - name: JSON output smoke
         shell: bash
         run: |
-          printf 'abc' > /tmp/ref.txt
-          ./build/monkey_bench /tmp/ref.txt -d 2 --warmup 0 --output-format json
+          printf 'abc' > ref.txt
+          ./build/monkey_bench ref.txt -d 2 --warmup 0 --output-format json
