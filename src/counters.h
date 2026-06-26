@@ -38,10 +38,13 @@ public:
     unsigned size() const noexcept { return count_.load(std::memory_order_acquire); }
 
 private:
-    // alignas(64): один слот на линию кэша. C++17 даёт выровненное operator new[].
-    struct alignas(64) Slot {
+    // Каждый слот живёт на своей линии кэша (64 байта), чтобы исключить false sharing.
+    // Явный padding вместо alignas(64) — обходим MSVC-баг с over-aligned new[].
+    struct Slot {
         std::atomic<uint64_t> v{0};
+        char pad[56];
     };
+    static_assert(sizeof(Slot) == 64, "Slot must be exactly one cache line");
 
     std::unique_ptr<Slot[]> slots_;
     std::atomic<unsigned> count_{0};
