@@ -3,11 +3,12 @@
 #include <cmath>
 #include <cstdint>
 
+#include "../uint128.h"
+
 // BBP kernel: вычисление k-го hex-знака числа π по формуле
 // Bailey-Borwein-Plouffe (1996). Полностью stateless — только от counter'а.
 //
-// Арифметика: double + модулярное возведение (powmod16). На CUDA double
-// эквивалентна IEEE 754 — результаты бит-в-бит совпадают с CPU.
+// Арифметика: double + модулярное возведение через mulmod64 (портируемо).
 // verify() сверяет первые 1024 знака с reference/pi_hex.txt.
 
 #if defined(__CUDACC__)
@@ -19,15 +20,14 @@
 namespace monkey {
 namespace kernel {
 
-// 16^e mod m через fast exponentiation.
+// 16^e mod m через fast exponentiation с портируемым mulmod64.
 BBP_HD inline uint64_t bbp_powmod16(uint64_t e, uint64_t m) {
     if (m == 0) return 0;
     uint64_t r = 1;
     uint64_t b = 16 % m;
     while (e) {
-        if (e & 1u)
-            r = static_cast<uint64_t>((static_cast<__uint128_t>(r) * b) % m);
-        b = static_cast<uint64_t>((static_cast<__uint128_t>(b) * b) % m);
+        if (e & 1u) r = mulmod64(r, b, m);
+        b = mulmod64(b, b, m);
         e >>= 1u;
     }
     return r;

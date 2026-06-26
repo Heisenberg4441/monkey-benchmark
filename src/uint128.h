@@ -7,12 +7,20 @@
 // as Counter; on MSVC and in CUDA __device__ code a custom struct provides
 // the same semantics with add / mul-u64 / divmod-u32.
 //
-// The interface is deliberately narrow: only the operations needed by the
-// monkey-brute hot loop.  This keeps the CUDA device port trivial.
+// Also provides mulmod64 (64-bit modular multiplication) for BBP / Miller-Rabin.
 
-#if defined(__SIZEOF_INT128__) && !defined(__CUDACC__) && !defined(_MSC_VER)
+#if defined(__CUDACC__)
+#define U128_HD __host__ __device__
+#else
+#define U128_HD
+#endif
 
 namespace monkey {
+
+// -----------------------------------------------------------------------
+// Counter: portable 128-bit unsigned integer
+// -----------------------------------------------------------------------
+#if defined(__SIZEOF_INT128__) && !defined(__CUDACC__) && !defined(_MSC_VER)
 
 using Counter = __uint128_t;
 
@@ -27,17 +35,7 @@ inline Counter counter_divmod(Counter n, uint32_t d, uint32_t* rem) {
     return q;
 }
 
-} // namespace monkey
-
 #else
-
-#if defined(__CUDACC__)
-#define U128_HD __host__ __device__
-#else
-#define U128_HD
-#endif
-
-namespace monkey {
 
 struct Counter {
     uint64_t lo;
@@ -59,10 +57,7 @@ U128_HD inline Counter operator+(Counter a, Counter b) {
 
 U128_HD inline Counter& operator+=(Counter& a, Counter b) { a = a + b; return a; }
 
-// Multiply Counter by uint64_t (result fits in 128 bits because
-// Counter is already < 2^128 and the second operand is < 2^64).
 U128_HD inline Counter operator*(Counter a, uint64_t b) {
-    // Splat: a = a_hi*2^64 + a_lo,  a*b = a_hi*b*2^64 + a_lo*b
     const uint64_t lo_lo = static_cast<uint64_t>(static_cast<uint32_t>(a.lo)) *
                            static_cast<uint32_t>(b);
     const uint64_t lo_hi =
@@ -81,15 +76,12 @@ U128_HD inline Counter operator*(Counter a, uint64_t b) {
 
 U128_HD inline Counter operator*(uint64_t a, Counter b) { return b * a; }
 
-// Narrow division: Counter / uint32_t, Counter % uint32_t.
-// Returns quotient; *rem = remainder.
 U128_HD inline Counter counter_divmod(Counter n, uint32_t d, uint32_t* rem) {
     if (n.hi == 0) {
         const uint64_t q = n.lo / d;
         *rem = static_cast<uint32_t>(n.lo % d);
         return {q, 0};
     }
-    // 4-word / 1-word schoolbook division, MSW-first.
     uint32_t w[4] = {
         static_cast<uint32_t>(n.lo),
         static_cast<uint32_t>(n.lo >> 32),
@@ -103,11 +95,33 @@ U128_HD inline Counter counter_divmod(Counter n, uint32_t d, uint32_t* rem) {
         r = cur % d;
     }
     *rem = static_cast<uint32_t>(r);
-    return {{static_cast<uint64_t>(w[0]) | (static_cast<uint64_t>(w[1]) << 32),
-             static_cast<uint64_t>(w[2]) | (static_cast<uint64_t>(w[3]) << 32)}};
+    const uint64_t lo = static_cast<uint64_t>(w[0]) | (static_cast<uint64_t>(w[1]) << 32);
+    const uint64_t hi = static_cast<uint64_t>(w[2]) | (static_cast<uint64_t>(w[3]) << 32);
+    Counter q{lo, hi};
+    return q;
+}
+
+#endif // Counter
+
+// -----------------------------------------------------------------------
+// mulmod64: (a * b) % m without 128-bit overflow. Portable everywhere.
+// -----------------------------------------------------------------------
+U128_HD inline uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t m) {
+#if defined(__SIZEOF_INT128__) && !defined(__CUDACC__) && !defined(_MSC_VER)
+    return static_cast<uint64_t>((static_cast<__uint128_t>(a) * b) % m);
+#else
+    if (m == 0) return 0;
+    uint64_t r = 0;
+    a %= m;
+    while (b) {
+        if (b & 1u) { r += a; if (r >= m) r -= m; }
+        a <<= 1u; if (a >= m) a -= m;
+        b >>= 1u;
+    }
+    return r;
+#endif
 }
 
 } // namespace monkey
 
 #undef U128_HD
-#endif
