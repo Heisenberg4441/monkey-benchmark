@@ -72,7 +72,9 @@ Download the archive for your platform from the releases page and run:
   `xattr -dr com.apple.quarantine .` in the folder.
 
 Only a normal GPU driver is needed. Without a Vulkan or CUDA driver the binary
-still runs the CPU categories and says why the GPU is unavailable.
+still runs the CPU categories and says why the GPU is unavailable. If a broken
+GPU driver crashes the process, set `MONKEY_DISABLE_VULKAN=1` to run the CPU
+categories only.
 
 For a stable result, close heavy applications and plug laptops in.
 

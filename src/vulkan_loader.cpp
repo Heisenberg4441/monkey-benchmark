@@ -1,5 +1,6 @@
 #include "vulkan_loader.h"
 
+#include <cstdlib>
 #include <mutex>
 
 #if defined(_WIN32)
@@ -44,6 +45,12 @@ void* find_sym(void* lib, const char* name) {
 }
 
 void load_once() {
+    // Аварийный выключатель: падение внутри драйвера (abort в Metal на
+    // паравиртуальном GPU macOS 14) не перехватить, а CPU-категории нужны.
+    if (const char* off = std::getenv("MONKEY_DISABLE_VULKAN"); off && *off && *off != '0') {
+        lib_error = "vulkan: disabled by MONKEY_DISABLE_VULKAN";
+        return;
+    }
     const char* candidates[] = {
 #if defined(_WIN32)
         "vulkan-1.dll",

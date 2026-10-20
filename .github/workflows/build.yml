@@ -117,10 +117,15 @@ jobs:
 
       # Смоук упакованного бинаря: запускается, находит (или честно не находит)
       # GPU, ядра этой сборки совпадают с golden.
+      # На macos-14 паравиртуальный GPU виртуалки падает внутри Metal
+      # (newArgumentEncoderWithArguments) при инициализации MoltenVK — баг
+      # драйвера образа, на реальных Mac и на образе macOS 26 его нет. GPU-путь
+      # этой же раскладки проверяет tests.yml на macOS 26; здесь — только CPU.
       - name: Smoke test packaged binary
         shell: bash
         env:
           MVK_CONFIG_LOG_LEVEL: 3 # предупреждения и ошибки MoltenVK в лог
+          MONKEY_DISABLE_VULKAN: ${{ runner.os == 'macOS' && '1' || '' }}
         run: |
           cd dist
           ./monkey_bench --version
