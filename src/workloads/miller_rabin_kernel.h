@@ -76,10 +76,13 @@ MR_HD inline bool miller_rabin_is_prime(uint64_t n) {
         ++s;
     }
 
-    // Детерминированные свидетели для n < 2^64 (Jim Sinclair).
+    // Детерминированные свидетели для n < 2^64 (Jim Sinclair). Набор проверен
+    // в форме «a mod n, нулевой свидетель пропускается». Пропуск a >= n
+    // (а не редукция) даёт ложные простые: 4033 и 4681 проходят по {2, 325}.
     const uint64_t witnesses[] = {2, 325, 9375, 28178, 450775, 9780504, 1795265022};
-    for (auto a : witnesses) {
-        if (a >= n) continue;
+    for (uint64_t a : witnesses) {
+        a %= n;
+        if (a == 0) continue;
         if (!mr_witness(a, d, s, n)) return false;
     }
     return true;

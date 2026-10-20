@@ -26,9 +26,8 @@ private:
 
 // Miller-Rabin workload: тест простоты 64-битных целых.
 // Каждый counter = целое число n для проверки на простоту.
-// Детерминирован: использует известные свидетели для n < 3.3×10^14
-// (witnesses: 2, 3, 5, 7, 11, 13, 17); для больших n — witnesses
-// (2, 325, 9375, 28178, 450775, 9780504, 1795265022) по Jim Sinclair.
+// Детерминирован для всех n < 2^64: свидетели Jim Sinclair
+// {2, 325, 9375, 28178, 450775, 9780504, 1795265022}, каждый берётся mod n.
 class MillerRabinWorkload : public IWorkload {
 public:
     const char* name() const override { return "miller-rabin"; }

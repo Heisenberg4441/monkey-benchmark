@@ -72,9 +72,8 @@ void MillerRabinWorkload::execute_batch(Counter counter_start, uint64_t batch_si
     uint64_t done = 0;
     for (uint64_t i = 0; i < batch_size; ++i) {
         const uint64_t n = start + i;
-        if (n < 2) continue;
-        ++done;
-        if (n == 2 || n == 3 || kernel::miller_rabin_is_prime(n)) {
+        ++done; // каждый counter — одна операция, включая n < 2
+        if (kernel::miller_rabin_is_prime(n)) {
             out.checksum ^= n;
         }
     }
