@@ -24,6 +24,9 @@ option(USE_VULKAN "Сборка с Vulkan-бэкендом (любой GPU)" ON)
 option(MONKEY_NATIVE_ARCH "Оптимизация под локальную микроархитектуру (-march=native)" OFF)
 # Юнит-тесты (Catch2). CPU-only, без GPU SDK — собираются в любом окружении.
 option(MONKEY_BUILD_TESTS "Сборка юнит-тестов (Catch2 + ctest)" ON)
+# Принудительно переносимая арифметика ядер (без __int128 и интринсиков), как на
+# MSVC/в GLSL. Нужна CI, чтобы проверять эти пути на clang/gcc.
+option(MONKEY_PORTABLE_ARITH "Переносимые 32-битные пути арифметики ядер" OFF)
 
 find_package(Threads REQUIRED)
 
@@ -35,6 +38,9 @@ add_library(monkey_workloads STATIC
     src/workload_monkey.cpp
     src/workload_extra.cpp)
 target_include_directories(monkey_workloads PUBLIC src)
+if(MONKEY_PORTABLE_ARITH)
+    target_compile_definitions(monkey_workloads PUBLIC MONKEY_PORTABLE_ARITH)
+endif()
 
 # --- Базовый таргет (CPU всегда) -------------------------------------------
 add_executable(monkey_bench src/main.cpp src/cpu_backend.cpp)

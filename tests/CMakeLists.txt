@@ -22,6 +22,7 @@ monkey_add_test(test_workload_monkey test_workload_monkey.cpp)
 monkey_add_test(test_uint128 test_uint128.cpp)
 monkey_add_test(test_bbp test_bbp.cpp)
 monkey_add_test(test_miller_rabin test_miller_rabin.cpp)
+monkey_add_test(test_arith test_arith.cpp)
 
 # --- Слой 2: реальный прогон SPIR-V на Vulkan-устройстве --------------------
 # Собирается только если есть Vulkan SDK и компилятор GLSL. В рантайме тест сам
