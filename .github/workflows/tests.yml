@@ -2,71 +2,133 @@ name: Tests
 
 on:
   push:
-    branches: [master, main]
+    branches: [master, main, suite-v1]
   pull_request:
   workflow_dispatch:
 
 jobs:
   test:
-    name: Build + ctest (${{ matrix.os }})
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # Linux: Vulkan через Mesa lavapipe (программный GPU) — паритет и verify
+          # исполняют настоящий SPIR-V.
+          - name: Linux x64 (GCC, lavapipe)
+            os: ubuntu-latest
+            icd: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          - name: Linux arm64 (GCC, lavapipe)
+            os: ubuntu-24.04-arm
+            icd: /usr/share/vulkan/icd.d/lvp_icd.aarch64.json
+          # Тот же код без __int128 и интринсиков — пути, которыми идут MSVC и GLSL.
+          - name: Linux x64 (portable arithmetic)
+            os: ubuntu-latest
+            icd: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+            cmake_extra: -DMONKEY_PORTABLE_ARITH=ON
+          - name: Windows x64 (MSVC, Vulkan SDK)
+            os: windows-latest
+          - name: macOS arm64 (Apple Clang, MoltenVK)
+            os: macos-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Linux: Vulkan SDK + lavapipe для real-shader determinism test.
       - name: Install Vulkan + lavapipe (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev glslang-tools mesa-vulkan-drivers
+          sudo apt-get install -y libvulkan-dev glslang-tools mesa-vulkan-drivers ninja-build
+          echo "VK_ICD_FILENAMES=${{ matrix.icd }}" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=${{ matrix.icd }}" >> "$GITHUB_ENV"
 
-      # macOS: Vulkan SDK (MoltenVK) для real-shader test.
       - name: Install Vulkan SDK (macOS)
         if: runner.os == 'macOS'
-        run: brew install vulkan-headers vulkan-loader glslang molten-vk
+        run: brew install vulkan-headers vulkan-loader glslang molten-vk ninja
 
-      - name: Configure (Windows)
+      - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.296.0
+          install_runtime: true
+          cache: true
+
+      # Runner Windows без GPU: программный Vulkan — lavapipe из mesa-dist-win.
+      # Если скачать не удалось, GPU-проверки честно пропускаются (WARN/skipped).
+      - name: Install lavapipe (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $rel = Invoke-RestMethod https://api.github.com/repos/pal1000/mesa-dist-win/releases/latest
+          $asset = $rel.assets | Where-Object { $_.name -match 'release-msvc\.7z$' } | Select-Object -First 1
+          Invoke-WebRequest $asset.browser_download_url -OutFile mesa.7z
+          7z x mesa.7z -omesa | Out-Null
+          $icd = (Resolve-Path mesa\x64\lvp_icd.x86_64.json).Path
+          "VK_DRIVER_FILES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VK_ICD_FILENAMES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure
         run: >
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DUSE_CUDA=OFF -DUSE_VULKAN=OFF -DMONKEY_NATIVE_ARCH=OFF
-          -DMONKEY_BUILD_TESTS=ON
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: cmake --build build -j
-
-      - name: Configure (Unix)
-        if: runner.os != 'Windows'
-        run: >
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           -DUSE_CUDA=OFF -DUSE_VULKAN=ON -DMONKEY_NATIVE_ARCH=OFF
-          -DMONKEY_BUILD_TESTS=ON
+          -DMONKEY_BUILD_TESTS=ON ${{ matrix.cmake_extra }}
 
-      - name: Build (Unix)
-        if: runner.os != 'Windows'
-        run: cmake --build build -j
+      - name: Build
+        run: cmake --build build -j 4
 
-      - name: Run tests
+      - name: Unit, parity and CLI tests
         working-directory: build
-        env:
-          VK_ICD_FILENAMES: ${{ runner.os == 'Linux' && '/usr/share/vulkan/icd.d/lvp_icd.x86_64.json' || '' }}
         run: ctest --output-on-failure
 
-      - name: Smoke bench
-        shell: bash
-        run: |
-          printf 'abc' > ref.txt
-          ./build/monkey_bench ref.txt -d 2 --warmup 0
+      - name: Verify kernels on every backend
+        run: ./build/monkey_bench verify --vk-allow-cpu
 
-      - name: JSON output smoke
-        shell: bash
+      # Полный suite на программном GPU шёл бы часами: CPU-категории + verify.
+      - name: Quick suite (CPU) with JSON report
+        run: ./build/monkey_bench run --quick --cpu --json bench.json
+
+      - name: Validate JSON against the schema
         run: |
-          printf 'abc' > ref.txt
-          ./build/monkey_bench ref.txt -d 2 --warmup 0 --output-format json
+          pipx run check-jsonschema --check-metaschema bench_output.schema.json
+          pipx run check-jsonschema --schemafile bench_output.schema.json bench.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.os }}${{ matrix.cmake_extra && '-portable' || '' }}
+          path: bench.json
+          if-no-files-found: ignore
+
+  # CUDA собирается без GPU: проверка, что nvcc компилирует общие ядра.
+  cuda-build:
+    name: Linux x64 CUDA build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.24
+        with:
+          cuda: '12.8.1'
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
+          use-github-cache: false
+          use-local-cache: false
+      - name: Install Vulkan
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev glslang-tools ninja-build
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUSE_CUDA=ON
+          -DCMAKE_CUDA_ARCHITECTURES=75-real -DMONKEY_NATIVE_ARCH=OFF
+      - name: Build
+        run: cmake --build build -j 4
+      - name: Tests (CUDA parity skips without a device)
+        working-directory: build
+        run: ctest --output-on-failure

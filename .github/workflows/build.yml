@@ -1,7 +1,7 @@
 name: Build and Release Binaries
 
-# Запуск только при пуше тега (например, v1.0.0) 
-# и при ручном запуске во вкладке Actions
+# Сборка релизных бинарей на теге v* (и вручную). Релиз на GitHub создаётся
+# только для тега.
 on:
   push:
     tags:
@@ -10,38 +10,45 @@ on:
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux/Windows собираются с CUDA: компиляция требует только Toolkit,
-          # GPU на раннере не нужен. fat-binary покрывает Turing→Blackwell (real)
-          # + PTX (virtual) для будущих карт через JIT.
-          - os: ubuntu-latest
-            artifact_name: monkey_bench_linux_x86_64
-            bin_path: build/monkey_bench
+          # Linux собирается на 22.04 (glibc 2.35): бинарь запускается на
+          # большинстве живых дистрибутивов. CUDA компилируется без GPU на раннере:
+          # fat binary Turing → Blackwell (real) + PTX для будущих карт.
+          - name: Linux x86_64 (CUDA + Vulkan)
+            os: ubuntu-22.04
+            archive: monkey_bench_linux_x86_64.tar.gz
             cuda: true
-            cmake_cuda: '-DUSE_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"'
-          - os: macos-14 # Apple Silicon: CUDA на macOS не существует, только CPU.
-            artifact_name: monkey_bench_macos_arm64
-            bin_path: build/monkey_bench
+            cmake_extra: '-DUSE_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"'
+          - name: Linux arm64 (Vulkan)
+            os: ubuntu-22.04-arm
+            archive: monkey_bench_linux_arm64.tar.gz
             cuda: false
-            cmake_cuda: '-DUSE_CUDA=OFF'
-          # windows-2022 (VS2022): CUDA 12.8 поддерживает MSVC только до VS2022;
-          # на windows-latest (VS2026) nvcc отказывается компилировать.
-          - os: windows-2022
-            artifact_name: monkey_bench_windows_x86_64.exe
-            bin_path: build/monkey_bench.exe
+            cmake_extra: '-DUSE_CUDA=OFF'
+          # windows-2022 (VS2022): CUDA 12.8 поддерживает MSVC только до VS2022.
+          - name: Windows x86_64 (CUDA + Vulkan)
+            os: windows-2022
+            archive: monkey_bench_windows_x86_64.zip
             cuda: true
-            cmake_cuda: '-DUSE_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"'
+            cmake_extra: '-DUSE_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"'
+          # Apple Silicon: Vulkan через MoltenVK, библиотека лежит в архиве рядом
+          # с бинарём. Без неё бинарь работает на CPU и сообщает, что GPU нет.
+          - name: macOS arm64 (Vulkan via MoltenVK)
+            os: macos-14
+            archive: monkey_bench_macos_arm64.zip
+            cuda: false
+            cmake_extra: '-DUSE_CUDA=OFF'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git sha и тег в build_info
 
-      - name: Set up MSVC environment (Windows)
+      - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -50,16 +57,16 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.24
         with:
           cuda: '12.8.1'
-          method: 'network'
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
           use-github-cache: false
           use-local-cache: false
 
-      # Vulkan SDK для второго GPU-бэкенда (AMD/Intel/любой). Линкуем loader
-      # динамически — на машине пользователя он идёт с драйвером GPU (а на
-      # Windows 10+ ещё и с самой ОС), ставить ничего не нужно.
-      - name: Install Vulkan SDK (Linux)
+      # Vulkan нужен только для сборки (заголовки + glslangValidator): loader
+      # грузится в рантайме, у пользователя он идёт с драйвером GPU.
+      - name: Install Vulkan headers and glslang (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev glslang-tools
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev glslang-tools ninja-build
 
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
@@ -69,30 +76,60 @@ jobs:
           install_runtime: false
           cache: true
 
-      # Релизные бинарники без -march=native ради портируемости. CUDA-рантайм
-      # линкуется статически (см. CMakeLists), пользователю нужен лишь драйвер.
-      # Windows: генератор Ninja (VS-генератор требует MSBuild-интеграцию CUDA,
-      # которой нет для свежих VS); nvcc указываем явно через CUDA_PATH, чтобы не
-      # зависеть от его наличия в PATH.
+      - name: Install Vulkan + MoltenVK (macOS)
+        if: runner.os == 'macOS'
+        run: brew install vulkan-headers vulkan-loader glslang molten-vk ninja
+
+      # Релиз без -march=native: бинарь не должен падать с Illegal instruction.
       - name: Configure (Windows)
         if: runner.os == 'Windows'
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMONKEY_NATIVE_ARCH=OFF -DCMAKE_CUDA_COMPILER="$env:CUDA_PATH\bin\nvcc.exe" ${{ matrix.cmake_cuda }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMONKEY_NATIVE_ARCH=OFF -DMONKEY_BUILD_TESTS=OFF -DCMAKE_CUDA_COMPILER="$env:CUDA_PATH\bin\nvcc.exe" ${{ matrix.cmake_extra }}
 
       - name: Configure (Unix)
         if: runner.os != 'Windows'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMONKEY_NATIVE_ARCH=OFF ${{ matrix.cmake_cuda }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMONKEY_NATIVE_ARCH=OFF -DMONKEY_BUILD_TESTS=OFF ${{ matrix.cmake_extra }}
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build build -j 4
 
-      - name: Stage artifact
-        run: cmake -E copy ${{ matrix.bin_path }} ${{ matrix.artifact_name }}
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp build/monkey_bench README.md README.ru.md bench_output.schema.json dist/
+          tar -C dist -czf ${{ matrix.archive }} .
 
-      - name: Upload Artifact
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          cp build/monkey_bench README.md README.ru.md bench_output.schema.json dist/
+          cp "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" dist/
+          cd dist && zip -r ../${{ matrix.archive }} .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build/monkey_bench.exe, README.md, README.ru.md, bench_output.schema.json dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive }}
+
+      # Смоук упакованного бинаря: запускается, находит (или честно не находит)
+      # GPU, ядра этой сборки совпадают с golden.
+      - name: Smoke test packaged binary
+        shell: bash
+        run: |
+          cd dist
+          ./monkey_bench --version
+          ./monkey_bench info
+          ./monkey_bench verify
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
 
   release:
     name: Create GitHub Release
@@ -102,10 +139,8 @@ jobs:
     # Необходимо для создания релиза: дефолтный GITHUB_TOKEN иначе read-only (403).
     permissions:
       contents: write
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -118,18 +153,21 @@ jobs:
           files: ./binaries/**/*
           fail_on_unmatched_files: true
           body: |
-            🐒 Infinite Monkey Benchmark
+            🐒 Infinite Monkey Benchmark — suite v1
 
-            Download the binary for your OS — no installation or dependencies required.
+            Run `monkey_bench` with no arguments: it runs the fixed suite on the CPU
+            (single- and multi-thread) and on every available GPU API, checks every
+            result against golden values and prints scores (1000 = Apple M4 Pro).
+            `monkey_bench run --json result.json` writes a leaderboard-ready report.
 
-            - **Windows / Linux**: both GPU backends are built in. The benchmark
-              picks automatically — **NVIDIA → CUDA**, any other GPU (AMD / Intel)
-              **→ Vulkan** — and falls back to the CPU if no GPU is available
-              (`-gpu` / `-all`, or force with `--gpu-api cuda|vulkan`). No SDK needed,
-              only your normal GPU driver.
-            - **macOS (Apple Silicon)**: CPU-only build (GPU support coming via
-              Vulkan/MoltenVK).
+            - **Windows x86_64 / Linux x86_64**: CUDA (NVIDIA) and Vulkan (any GPU).
+            - **Linux arm64**: Vulkan.
+            - **macOS arm64**: Vulkan via the bundled MoltenVK (`libMoltenVK.dylib`
+              must stay next to the binary). Downloaded binaries are quarantined by
+              Gatekeeper: `xattr -dr com.apple.quarantine .` in the unpacked folder.
 
-            See the [README](README.md) for usage.
+            No SDK needed — only a normal GPU driver. Without a Vulkan/CUDA driver
+            the binary runs the CPU categories and says why the GPU is unavailable.
+            See the README for the methodology.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
