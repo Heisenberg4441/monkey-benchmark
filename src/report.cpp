@@ -25,6 +25,13 @@ const char* column_title(const std::string& key) {
 // Порядок колонок таблицы и категорий в JSON.
 const char* const kOrder[] = {"cpu_st", "cpu_mt", "gpu_cuda", "gpu_vulkan", "combined", "custom"};
 
+// Выравнивание по числу символов, а не байт: «±» в UTF-8 занимает два байта.
+std::string pad_left(const std::string& s, size_t width) {
+    size_t chars = 0;
+    for (unsigned char c : s) chars += (c & 0xC0) != 0x80;
+    return chars >= width ? s : std::string(width - chars, ' ') + s;
+}
+
 std::string fmt_score(double s) {
     if (!std::isfinite(s)) return "-";
     char buf[32];
@@ -264,7 +271,7 @@ void print_scores(const Report& r, std::ostream& os) {
                     cell = buf;
                 }
             }
-            os << std::right << std::setw(16) << cell;
+            os << pad_left(cell, 16);
         }
         os << "\n";
     }
