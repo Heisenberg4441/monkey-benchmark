@@ -119,12 +119,11 @@ if(USE_CUDA AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     set(MONKEY_HAS_CUDA ON)
     message(STATUS "CUDA найден: GPU-бэкенд (NVIDIA) включён")
+    find_package(CUDAToolkit REQUIRED)
     add_library(monkey_cuda STATIC src/cuda_device.cu)
-    target_link_libraries(monkey_cuda PUBLIC monkey_workloads)
-    set_target_properties(monkey_cuda PROPERTIES
-        CUDA_STANDARD 17
-        # Статический CUDA-рантайм: пользователю нужен лишь драйвер NVIDIA.
-        CUDA_RUNTIME_LIBRARY Static)
+    # Статический CUDA-рантайм: пользователю нужен лишь драйвер NVIDIA.
+    target_link_libraries(monkey_cuda PUBLIC monkey_workloads CUDA::cudart_static)
+    set_target_properties(monkey_cuda PROPERTIES CUDA_STANDARD 17 CUDA_RUNTIME_LIBRARY Static)
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         set_target_properties(monkey_cuda PROPERTIES CUDA_ARCHITECTURES "75-real;86-real;89-real;90-real")
     endif()
@@ -137,9 +136,6 @@ endif()
 # --- Бинарь -----------------------------------------------------------------
 add_executable(monkey_bench src/main.cpp src/cpu_backend.cpp src/gpu_backend.cpp)
 target_link_libraries(monkey_bench PRIVATE Threads::Threads monkey_workloads monkey_vulkan monkey_cuda)
-if(MONKEY_HAS_CUDA)
-    set_target_properties(monkey_bench PROPERTIES CUDA_RUNTIME_LIBRARY Static)
-endif()
 
 # Linux: статически линкуем libstdc++/libgcc, чтобы бинарник не зависел от
 # версии libstdc++ в дистрибутиве. Полный -static нельзя: GPU-рантаймы

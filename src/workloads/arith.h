@@ -27,6 +27,10 @@
 #if !defined(MONKEY_PORTABLE_ARITH) && defined(__SIZEOF_INT128__) && !defined(__CUDACC__)
 #define MONKEY_ARITH_INT128 1
 #endif
+// Интринсики MSVC — только вне nvcc: в host-проходе nvcc <intrin.h> не подключён.
+#if !defined(MONKEY_PORTABLE_ARITH) && defined(_MSC_VER) && !defined(__CUDACC__)
+#define MONKEY_ARITH_MSVC 1
+#endif
 
 namespace monkey {
 namespace kernel {
@@ -54,7 +58,7 @@ KERNEL_HD inline int clz64(uint64_t x) {
     return __clzll(static_cast<long long>(x));
 #elif defined(__GNUC__) || defined(__clang__)
     return __builtin_clzll(x);
-#elif defined(_MSC_VER)
+#elif defined(MONKEY_ARITH_MSVC)
     unsigned long idx = 0;
     _BitScanReverse64(&idx, x);
     return 63 - static_cast<int>(idx);
@@ -70,7 +74,7 @@ KERNEL_HD inline int ctz64(uint64_t x) {
     return __ffsll(static_cast<long long>(x)) - 1;
 #elif defined(__GNUC__) || defined(__clang__)
     return __builtin_ctzll(x);
-#elif defined(_MSC_VER)
+#elif defined(MONKEY_ARITH_MSVC)
     unsigned long idx = 0;
     _BitScanForward64(&idx, x);
     return static_cast<int>(idx);
@@ -102,11 +106,11 @@ KERNEL_HD inline uint64_t mulhi64(uint64_t a, uint64_t b) {
     return __umul64hi(a, b);
 #elif defined(MONKEY_ARITH_INT128)
     return static_cast<uint64_t>((static_cast<unsigned __int128>(a) * b) >> 64);
-#elif !defined(MONKEY_PORTABLE_ARITH) && defined(_MSC_VER) && defined(_M_X64)
+#elif defined(MONKEY_ARITH_MSVC) && defined(_M_X64)
     unsigned __int64 hi = 0;
     (void)_umul128(a, b, &hi);
     return hi;
-#elif !defined(MONKEY_PORTABLE_ARITH) && defined(_MSC_VER) && defined(_M_ARM64)
+#elif defined(MONKEY_ARITH_MSVC) && defined(_M_ARM64)
     return __umulh(a, b);
 #else
     return mulhi64_portable(a, b);
