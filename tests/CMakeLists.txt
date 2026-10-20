@@ -23,6 +23,8 @@ monkey_add_test(test_bbp test_bbp.cpp)
 monkey_add_test(test_miller_rabin test_miller_rabin.cpp)
 monkey_add_test(test_arith test_arith.cpp)
 monkey_add_test(test_engine test_engine.cpp)
+monkey_add_test(test_json test_json.cpp)
+monkey_add_test(test_suite test_suite.cpp)
 # Паритет бэкендов: GPU-исполнители против эталонного CPU. Без SDK — заглушки,
 # тест делает WARN и проходит.
 monkey_add_test(test_parity test_parity.cpp)
@@ -80,3 +82,20 @@ if(CMAKE_CUDA_COMPILER)
 else()
     message(STATUS "CUDA не включён — cross-backend determinism test (CUDA) пропущен")
 endif()
+
+# --- Смоук-тесты CLI ---------------------------------------------------------
+# Бинарь целиком: подкоманды, старый синтаксис, ошибки опций. verify сверяет
+# каждое ядро на каждом доступном бэкенде (программный Vulkan разрешён).
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/cli_ref_abc.txt "abcab")
+add_test(NAME cli_version COMMAND monkey_bench --version)
+add_test(NAME cli_list COMMAND monkey_bench list)
+add_test(NAME cli_info COMMAND monkey_bench info --vk-allow-cpu)
+add_test(NAME cli_verify COMMAND monkey_bench verify --vk-allow-cpu)
+add_test(NAME cli_custom_legacy COMMAND monkey_bench ${CMAKE_CURRENT_BINARY_DIR}/cli_ref_abc.txt -cpu -d 0.3 --warmup 0)
+add_test(NAME cli_custom_match COMMAND monkey_bench custom ${CMAKE_CURRENT_BINARY_DIR}/cli_ref_abc.txt -m brute --warmup 0)
+set_tests_properties(cli_custom_match PROPERTIES PASS_REGULAR_EXPRESSION "MATCH FOUND at index 46 ")
+add_test(NAME cli_custom_bbp COMMAND monkey_bench -w bbp -t 2 -d 0.3 --warmup 0)
+add_test(NAME cli_bad_option COMMAND monkey_bench run --no-such-option)
+set_tests_properties(cli_bad_option PROPERTIES WILL_FAIL TRUE)
+add_test(NAME cli_bad_test COMMAND monkey_bench run --test nope)
+set_tests_properties(cli_bad_test PROPERTIES WILL_FAIL TRUE)

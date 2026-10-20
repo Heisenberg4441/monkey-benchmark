@@ -197,7 +197,10 @@ public:
         if (!prepared_) throw GpuError("cuda: run_range before prepare");
         RangeResult res;
         if (count == 0) return res;
-        const uint64_t threads = std::min<uint64_t>(count, kThreadsTarget);
+        // MR: автомату (MrLane) нужно >= 32 чисел на поток (см. vulkan_device.cpp).
+        const uint64_t min_steps = params_.kernel == KernelId::MillerRabin ? 32 : 1;
+        const uint64_t threads =
+            std::max<uint64_t>(1, std::min<uint64_t>((count + min_steps - 1) / min_steps, kThreadsTarget));
         const auto blocks = static_cast<uint32_t>(std::min<uint64_t>((threads + kBlock - 1) / kBlock, max_blocks_));
         const uint64_t total = static_cast<uint64_t>(blocks) * kBlock;
         const uint64_t steps = (count + total - 1) / total;

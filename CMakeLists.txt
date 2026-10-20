@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(monkey_benchmark LANGUAGES CXX)
+project(monkey_benchmark VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,6 +53,7 @@ add_custom_command(
 
 add_library(monkey_workloads STATIC
     src/kernels.cpp
+    src/suite.cpp
     src/engine.cpp
     src/runner.cpp
     src/pi_digits.cpp
@@ -136,9 +137,33 @@ else()
     target_link_libraries(monkey_cuda PUBLIC monkey_workloads)
 endif()
 
+# --- Отчёт: система, сборка, баллы, JSON v2 -----------------------------------
+# build_info.h (версия, git sha, флаги) переписывается на каждой сборке, если
+# изменился: sha в отчёте всегда соответствует бинарю.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" MONKEY_BT)
+set(MONKEY_FLAGS_STR "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${MONKEY_BT}}")
+if(MONKEY_NATIVE_ARCH)
+    string(APPEND MONKEY_FLAGS_STR " -march=native")
+endif()
+if(MONKEY_PORTABLE_ARITH)
+    string(APPEND MONKEY_FLAGS_STR " -DMONKEY_PORTABLE_ARITH")
+endif()
+add_custom_target(monkey_build_info
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/gen
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/gen/build_info.h
+            -DVERSION=${PROJECT_VERSION} "-DFLAGS=${MONKEY_FLAGS_STR}" -DBUILD_TYPE=${CMAKE_BUILD_TYPE}
+            -P ${CMAKE_SOURCE_DIR}/cmake/build_info.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/gen/build_info.h
+    COMMENT "build_info.h"
+    VERBATIM)
+add_library(monkey_report STATIC src/report.cpp src/sysinfo.cpp)
+add_dependencies(monkey_report monkey_build_info)
+target_include_directories(monkey_report PRIVATE ${CMAKE_BINARY_DIR}/gen)
+target_link_libraries(monkey_report PUBLIC monkey_workloads)
+
 # --- Бинарь -----------------------------------------------------------------
-add_executable(monkey_bench src/main.cpp src/cpu_backend.cpp src/gpu_backend.cpp)
-target_link_libraries(monkey_bench PRIVATE Threads::Threads monkey_workloads monkey_vulkan monkey_cuda)
+add_executable(monkey_bench src/main.cpp)
+target_link_libraries(monkey_bench PRIVATE monkey_report monkey_workloads monkey_vulkan monkey_cuda)
 
 # Linux: статически линкуем libstdc++/libgcc, чтобы бинарник не зависел от
 # версии libstdc++ в дистрибутиве. Полный -static нельзя: GPU-рантаймы
@@ -161,5 +186,10 @@ if(MONKEY_NATIVE_ARCH)
     if(HAS_MARCH_NATIVE)
         target_compile_options(monkey_workloads PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-march=native>)
         target_compile_options(monkey_bench PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-march=native>)
+        target_compile_definitions(monkey_report PRIVATE MONKEY_NATIVE_ARCH_ENABLED)
     endif()
 endif()
+
+# --- Генератор golden suite (не входит в релиз) -------------------------------
+add_executable(monkey_suite_gen EXCLUDE_FROM_ALL tools/suite_gen.cpp)
+target_link_libraries(monkey_suite_gen PRIVATE monkey_workloads)

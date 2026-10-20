@@ -59,9 +59,9 @@ struct RangeResult {
 };
 
 // Окно BBP по умолчанию: positions последних позиций встроенного pi_hex.txt,
-// блоки по block_terms членов. 1024 члена — ~0.25 мс на ядре CPU и ~25 мс на
-// потоке GPU (M4 Pro): единица мельче чанка и диспатча на любом устройстве.
-kernel::BbpParams bbp_window(uint32_t positions, uint32_t block_terms = 1024);
+// блоки по block_terms членов. 256 членов — ~25 мкс на ядре CPU и ~4 мс на
+// потоке GPU (M4 Pro): GPU выходит на полную скорость уже при диспатче ~30 мс.
+kernel::BbpParams bbp_window(uint32_t positions, uint32_t block_terms = 256);
 
 // Число индексов, покрывающих окно BBP (positions · blocks).
 uint64_t bbp_units(const kernel::BbpParams& p);

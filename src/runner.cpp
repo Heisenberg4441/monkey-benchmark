@@ -104,10 +104,10 @@ FixedRun run_fixed(Engine& e, const KernelParams& kp, uint64_t N, const DeviceSe
 
 TimedRun run_timed(Engine& e, const KernelParams& kp, uint64_t range_end, double seconds,
                    bool stop_on_match, const DeviceSel& sel, double warmup_s,
-                   const Progress& progress) {
+                   const Progress& progress, bool tune) {
     TimedRun out;
-    e.plan = ChunkPlan{};
-    if (warmup_s > 0) {
+    if (tune) e.plan = ChunkPlan{};
+    if (tune && warmup_s > 0) {
         JobSpec s = make_spec(kp, sel);
         s.end = range_end;
         s.adaptive = true;
@@ -124,7 +124,7 @@ TimedRun run_timed(Engine& e, const KernelParams& kp, uint64_t range_end, double
     for (;;) {
         JobSpec s = make_spec(kp, sel);
         s.end = range_end;
-        s.adaptive = warmup_s <= 0;
+        s.adaptive = tune && warmup_s <= 0;
         s.keep_samples = true;
         s.stop_on_full_match = stop_on_match;
         if (seconds > 0) s.max_seconds = seconds - elapsed;
@@ -146,7 +146,11 @@ TimedRun run_timed(Engine& e, const KernelParams& kp, uint64_t range_end, double
         out.gpu_units += r.gpu_units;
         elapsed += r.seconds;
         if (r.res.first_full != UINT64_MAX) out.found = true;
-        if (r.completed) ++out.passes;
+        if (r.completed) {
+            ++out.passes;
+            out.pass_results.push_back(r.res);
+            out.pass_bbp.push_back(r.bbp_acc);
+        }
         if (out.found || seconds <= 0 || elapsed >= seconds || !r.completed) break;
     }
     out.seconds = elapsed;

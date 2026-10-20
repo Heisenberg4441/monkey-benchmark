@@ -69,10 +69,14 @@ VkInstance create_instance() {
     if (has_extension(exts, "VK_KHR_get_physical_device_properties2"))
         enabled.push_back("VK_KHR_get_physical_device_properties2");
 
+    // 1.2, если loader умеет: иначе MoltenVK сообщает устройство как 1.1 и не
+    // отдаёт VkPhysicalDeviceDriverProperties (имя и версию драйвера).
+    uint32_t loader = VK_API_VERSION_1_0;
+    if (vkEnumerateInstanceVersion(&loader) != VK_SUCCESS) loader = VK_API_VERSION_1_0;
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "monkey_bench";
-    app.apiVersion = VK_API_VERSION_1_1;
+    app.apiVersion = loader >= VK_API_VERSION_1_2 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1;
 
     VkInstanceCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -428,9 +432,12 @@ RangeResult VulkanDevice::run_range(uint64_t begin, uint64_t count) {
     RangeResult res;
     if (count == 0) return res;
 
-    // Геометрия: ~2^20 потоков, остальное — шагами внутри потока. Счётчики
+    // Геометрия: до 2^20 потоков, остальное — шагами внутри потока. Счётчики
     // workgroup'ы 32-битные, поэтому 256·steps < 2^32.
-    const uint64_t threads = std::min<uint64_t>(count, kThreadsTarget);
+    // MR: автомату (MrLane) нужно >= 32 чисел на поток, иначе диспатч ждёт
+    // отставших с простыми; на M4 Pro 2^16 потоков вместо 2^20 — ×2.6.
+    const uint64_t min_steps = params_.kernel == KernelId::MillerRabin ? 32 : 1;
+    const uint64_t threads = std::max<uint64_t>(1, std::min<uint64_t>((count + min_steps - 1) / min_steps, kThreadsTarget));
     const auto groups = static_cast<uint32_t>(std::min<uint64_t>((threads + kLocalSize - 1) / kLocalSize, kMaxGroups));
     const uint64_t total = static_cast<uint64_t>(groups) * kLocalSize;
     const uint64_t steps = (count + total - 1) / total;

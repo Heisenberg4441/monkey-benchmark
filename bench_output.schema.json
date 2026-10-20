@@ -1,117 +1,161 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "MonkeyBench Output",
-  "description": "Output of a single benchmark run (--output-format json).",
+  "$id": "https://github.com/Heisenberg4441/monkey-benchmark/bench_output.schema.json",
+  "title": "monkey_bench report, schema v2",
+  "description": "Output of `monkey_bench run|custom --json FILE`. 64-bit checksums are hex strings because JSON numbers lose precision above 2^53. Missing values are null.",
   "type": "object",
-  "required": [
-    "reference",
-    "alphabet_size",
-    "string_length",
-    "workload",
-    "mode",
-    "backend",
-    "total_time_s",
-    "total_attempts",
-    "solution_found",
-    "ops_per_sec"
-  ],
+  "required": ["schema_version", "suite_version", "mode", "timestamp", "binary", "system", "devices", "tests", "scores", "flags"],
+  "additionalProperties": false,
+  "$defs": {
+    "hex64": { "type": "string", "pattern": "^0x[0-9a-f]{16}$" },
+    "num_or_null": { "type": ["number", "null"] },
+    "str_or_null": { "type": ["string", "null"] },
+    "int_or_null": { "type": ["integer", "null"], "minimum": 0 },
+    "category": { "enum": ["cpu_st", "cpu_mt", "gpu_vulkan", "gpu_cuda", "combined", "custom"] }
+  },
   "properties": {
-    "reference": {
-      "type": "string",
-      "description": "Reference text (match target)."
-    },
-    "alphabet_size": {
-      "type": "integer",
-      "description": "Cardinality of the alphabet derived from the reference file.",
-      "minimum": 1
-    },
-    "string_length": {
-      "type": "integer",
-      "description": "Number of Unicode characters in the reference.",
-      "minimum": 1
-    },
-    "workload": {
-      "type": "string",
-      "description": "Workload identifier (monkey, bbp, miller-rabin)."
-    },
-    "mode": {
-      "type": "string",
-      "description": "Operating mode (random or brute)."
-    },
-    "backend": {
-      "type": "string",
-      "description": "Execution backend (cpu, cuda, vulkan)."
-    },
-    "threads": {
-      "type": "integer",
-      "description": "Number of CPU threads used."
-    },
-    "batch_size": {
-      "type": "integer",
-      "description": "Batch size used."
-    },
-    "seed": {
-      "type": "integer",
-      "description": "PRNG seed."
-    },
-    "total_time_s": {
-      "type": "number",
-      "description": "Total wall-clock time of the measurement phase."
-    },
-    "total_attempts": {
-      "type": "integer",
-      "description": "Total number of candidates checked."
-    },
-    "solution_found": {
-      "type": "boolean",
-      "description": "Whether an exact match was found."
-    },
-    "ops_per_sec": {
+    "schema_version": { "const": 2 },
+    "suite_version": { "type": "integer", "minimum": 1, "description": "Scores of different suite versions are not comparable." },
+    "mode": { "enum": ["standard", "quick", "stress", "custom"] },
+    "runs": { "type": "integer", "minimum": 0, "description": "Repeats per test (fixed-work modes)." },
+    "timestamp": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$" },
+    "reference_machine": { "type": "string", "description": "Machine that scores 1000." },
+    "binary": {
       "type": "object",
-      "description": "Sampled throughput statistics.",
-      "required": [
-        "min",
-        "median",
-        "mean",
-        "p95",
-        "p99",
-        "max",
-        "stddev",
-        "cv"
-      ],
+      "required": ["version", "git_sha", "compiler", "flags", "build_type", "arith"],
+      "additionalProperties": false,
       "properties": {
-        "min": {
-          "type": "integer",
-          "description": "Minimum sample."
-        },
-        "median": {
-          "type": "integer",
-          "description": "Median sample."
-        },
-        "mean": {
-          "type": "number",
-          "description": "Arithmetic mean."
-        },
-        "p95": {
-          "type": "integer",
-          "description": "95th percentile."
-        },
-        "p99": {
-          "type": "integer",
-          "description": "99th percentile."
-        },
-        "max": {
-          "type": "integer",
-          "description": "Maximum sample."
-        },
-        "stddev": {
-          "type": "number",
-          "description": "Standard deviation."
-        },
-        "cv": {
-          "type": "number",
-          "description": "Coefficient of variation (stddev / mean)."
+        "version": { "type": "string" },
+        "git_sha": { "type": "string", "description": "Short sha, '-dirty' if built from modified sources." },
+        "compiler": { "type": "string" },
+        "flags": { "type": "string" },
+        "build_type": { "type": "string" },
+        "arith": { "enum": ["native", "portable"] }
+      }
+    },
+    "system": {
+      "type": "object",
+      "required": ["os", "os_version", "kernel", "arch", "cpu_model", "cores_physical", "cores_logical", "cores_performance", "cores_efficiency", "ram_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "os": { "$ref": "#/$defs/str_or_null" },
+        "os_version": { "$ref": "#/$defs/str_or_null" },
+        "kernel": { "$ref": "#/$defs/str_or_null" },
+        "arch": { "$ref": "#/$defs/str_or_null" },
+        "cpu_model": { "$ref": "#/$defs/str_or_null" },
+        "cores_physical": { "$ref": "#/$defs/int_or_null" },
+        "cores_logical": { "$ref": "#/$defs/int_or_null" },
+        "cores_performance": { "$ref": "#/$defs/int_or_null", "description": "Hybrid CPUs: performance cores (null if not hybrid or unknown)." },
+        "cores_efficiency": { "$ref": "#/$defs/int_or_null" },
+        "ram_bytes": { "$ref": "#/$defs/int_or_null" }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["api", "name", "vendor", "driver", "compute_units", "u64_mode", "init_time_s"],
+        "additionalProperties": false,
+        "properties": {
+          "api": { "enum": ["cpu", "vulkan", "cuda"] },
+          "name": { "$ref": "#/$defs/str_or_null" },
+          "vendor": { "$ref": "#/$defs/str_or_null" },
+          "driver": { "$ref": "#/$defs/str_or_null" },
+          "compute_units": { "$ref": "#/$defs/int_or_null", "description": "CPU: logical threads; CUDA: SMs; Vulkan: null." },
+          "u64_mode": { "anyOf": [{ "enum": ["native", "emulated"] }, { "type": "null" }] },
+          "init_time_s": { "type": "number", "minimum": 0, "description": "Device and pipeline creation, excluded from measurements." }
         }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "category", "backend", "work_units", "runs", "time_median", "time_min", "time_max", "cv", "ops_per_sec", "checksum", "expected_checksum", "hits", "expected_hits", "valid", "unstable", "t_ref", "score", "warmup_s", "chunk_size", "cpu_units", "gpu_units"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "category": { "$ref": "#/$defs/category" },
+          "backend": { "type": "string" },
+          "work_units": { "type": "integer", "minimum": 0 },
+          "runs": { "type": "array", "items": { "type": "number", "minimum": 0 }, "description": "Time of each fixed-work run, seconds." },
+          "time_median": { "$ref": "#/$defs/num_or_null" },
+          "time_min": { "$ref": "#/$defs/num_or_null" },
+          "time_max": { "$ref": "#/$defs/num_or_null" },
+          "cv": { "$ref": "#/$defs/num_or_null", "description": "Coefficient of variation of run times (null with one run)." },
+          "ops_per_sec": { "type": "number", "minimum": 0 },
+          "checksum": { "$ref": "#/$defs/hex64" },
+          "expected_checksum": { "anyOf": [{ "$ref": "#/$defs/hex64" }, { "type": "null" }] },
+          "hits": { "type": "integer", "minimum": 0 },
+          "expected_hits": { "$ref": "#/$defs/int_or_null" },
+          "valid": { "type": "boolean" },
+          "invalid_reason": { "$ref": "#/$defs/str_or_null" },
+          "unstable": { "type": "boolean", "description": "CV of run times above 3%." },
+          "t_ref": { "$ref": "#/$defs/num_or_null" },
+          "score": { "$ref": "#/$defs/num_or_null", "description": "1000 * t_ref / time_median; null if invalid or not scored." },
+          "warmup_s": { "type": "number", "minimum": 0 },
+          "chunk_size": { "type": "integer", "minimum": 0 },
+          "cpu_units": { "type": "integer", "minimum": 0 },
+          "gpu_units": { "type": "integer", "minimum": 0 },
+          "timed": {
+            "type": "object",
+            "description": "Stress and custom modes: time-limited runs.",
+            "required": ["seconds", "passes", "found", "throughput", "throttle_ratio"],
+            "additionalProperties": false,
+            "properties": {
+              "seconds": { "type": "number", "minimum": 0 },
+              "passes": { "type": "integer", "minimum": 0 },
+              "found": { "type": "boolean" },
+              "first_match_index": { "type": "integer", "minimum": 0 },
+              "throughput": {
+                "type": "object",
+                "required": ["samples", "min", "median", "mean", "p95", "max", "cv"],
+                "additionalProperties": false,
+                "properties": {
+                  "samples": { "type": "integer", "minimum": 0 },
+                  "min": { "$ref": "#/$defs/num_or_null" },
+                  "median": { "$ref": "#/$defs/num_or_null" },
+                  "mean": { "$ref": "#/$defs/num_or_null" },
+                  "p95": { "$ref": "#/$defs/num_or_null" },
+                  "max": { "$ref": "#/$defs/num_or_null" },
+                  "cv": { "$ref": "#/$defs/num_or_null" }
+                }
+              },
+              "throttle_ratio": { "$ref": "#/$defs/num_or_null", "description": "Throughput of the last 10% of time over the first 10%." }
+            }
+          }
+        }
+      }
+    },
+    "scores": {
+      "type": "object",
+      "required": ["categories", "cpu", "gpu", "gpu_api", "overall"],
+      "additionalProperties": false,
+      "properties": {
+        "categories": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/category" },
+          "additionalProperties": { "$ref": "#/$defs/num_or_null" }
+        },
+        "cpu": { "$ref": "#/$defs/num_or_null", "description": "geomean(cpu_st, cpu_mt)" },
+        "gpu": { "$ref": "#/$defs/num_or_null", "description": "Best GPU API category score." },
+        "gpu_api": { "anyOf": [{ "enum": ["vulkan", "cuda"] }, { "type": "null" }] },
+        "overall": { "$ref": "#/$defs/num_or_null", "description": "geomean(cpu_st, cpu_mt, gpu); null without a GPU." }
+      }
+    },
+    "flags": {
+      "type": "object",
+      "required": ["comparable", "custom", "debug_build", "native_arch", "portable_arith", "invalid", "unstable", "partial"],
+      "additionalProperties": false,
+      "properties": {
+        "comparable": { "type": "boolean", "description": "Suite run of a release-like build: scores may go to a leaderboard." },
+        "custom": { "type": "boolean" },
+        "debug_build": { "type": "boolean" },
+        "native_arch": { "type": "boolean" },
+        "portable_arith": { "type": "boolean" },
+        "invalid": { "type": "boolean" },
+        "unstable": { "type": "boolean" },
+        "partial": { "type": "boolean", "description": "Overall score not computed (no GPU or missing categories)." }
       }
     }
   }

@@ -57,14 +57,18 @@ struct TimedRun {
     uint64_t cpu_units = 0, gpu_units = 0;
     bool found = false;   // полное совпадение (monkey)
     std::vector<ChunkSample> samples; // время — от начала замера
+    // Результаты завершённых проходов окна — каждый сверяется с golden.
+    std::vector<RangeResult> pass_results;
+    std::vector<std::vector<uint64_t>> pass_bbp;
     std::string error;
 };
 
 // range_end — конец окна: проходы [0, range_end) повторяются, пока не выйдет
 // время (seconds > 0). seconds == 0 — один проход (для поиска «до совпадения»
-// range_end может быть UINT64_MAX).
+// range_end может быть UINT64_MAX). tune == false — чанк берётся из e.plan как
+// есть (custom --batch-size), без прогрева и подстройки.
 TimedRun run_timed(Engine& e, const KernelParams& kp, uint64_t range_end, double seconds,
                    bool stop_on_match, const DeviceSel& sel, double warmup_s,
-                   const Progress& progress = {});
+                   const Progress& progress = {}, bool tune = true);
 
 } // namespace monkey

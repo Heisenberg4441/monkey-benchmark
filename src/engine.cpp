@@ -119,9 +119,14 @@ void Engine::work(unsigned id, Job& j) {
                 j.abort.store(true, std::memory_order_relaxed);
                 break;
             }
-            const uint64_t b = j.next.fetch_add(chunk, std::memory_order_relaxed);
+            // CAS вместо fetch_add: счётчик не уходит за end и не переполняется у
+            // конца 64-битного пространства (fetch_add там заворачивался в 0).
+            uint64_t b = j.next.load(std::memory_order_relaxed), c = 0;
+            do {
+                if (b >= j.spec.end) break;
+                c = std::min(chunk, j.spec.end - b);
+            } while (!j.next.compare_exchange_weak(b, b + c, std::memory_order_relaxed));
             if (b >= j.spec.end) break;
-            const uint64_t c = std::min(chunk, j.spec.end - b);
             const double ta = since(j.t0);
             const RangeResult r = is_gpu ? gpu_->run_range(b, c)
                                          : cpu_run_range(kp, b, c, is_bbp ? bbp.data() : nullptr);

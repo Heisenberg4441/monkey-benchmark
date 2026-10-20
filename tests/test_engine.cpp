@@ -222,3 +222,20 @@ TEST_CASE("series statistics", "[runner]") {
     REQUIRE(s.mean == 2.5);
     REQUIRE(std::abs(s.cv - std::sqrt(5.0 / 3.0) / 2.5) < 1e-12);
 }
+
+TEST_CASE("a range ending at the top of the 64-bit space terminates", "[engine]") {
+    // Регрессия: fetch_add диспетчера переполнялся у 2^64 и уходил по кругу.
+    KernelParams kp;
+    kp.kernel = KernelId::MonkeyBrute;
+    kp.n = 28;
+    kp.target = {1, 2, 3, 4, 5};
+    Engine e(4, nullptr);
+    e.plan.cpu = 1u << 18;
+    JobSpec s;
+    s.kp = &kp;
+    s.begin = ~0ull - (1ull << 20);
+    s.end = ~0ull;
+    const JobResult r = e.run(s);
+    REQUIRE(r.completed);
+    REQUIRE(r.res == cpu_run_range(kp, s.begin, 1ull << 20, nullptr));
+}
