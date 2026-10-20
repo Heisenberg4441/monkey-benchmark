@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -141,6 +142,10 @@ TEST_CASE("Vulkan matches the CPU reference for every kernel", "[parity][vulkan]
         std::string err;
         auto dev = create_vulkan_device(opt, &err);
         if (!dev) {
+            // В CI с lavapipe устройство обязано быть: тихий пропуск скрыл бы,
+            // что паритет на GPU не проверялся.
+            const char* req = std::getenv("MONKEY_REQUIRE_VULKAN");
+            if (req && *req == '1') FAIL("Vulkan required but unavailable: " << err);
             WARN("no Vulkan device (" << err << ") — skipping");
             return;
         }
