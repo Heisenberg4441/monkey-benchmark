@@ -397,7 +397,10 @@ int cmd_run(const std::vector<std::string>& args) {
     std::vector<std::unique_ptr<Engine>> gpu_engines;
     for (auto& g : gpus) gpu_engines.push_back(std::make_unique<Engine>(0, g.dev.get()));
     std::unique_ptr<Engine> combined;
-    if (want_combined && !gpus.empty()) combined = std::make_unique<Engine>(threads, gpus.front().dev.get());
+    // CPU+GPU: одно ядро остаётся хост-потоку GPU, иначе 14 CPU-воркеров на 14
+    // ядрах задерживают подачу диспатчей и GPU простаивает (замер в BENCH.md).
+    if (want_combined && !gpus.empty())
+        combined = std::make_unique<Engine>(threads > 1 ? threads - 1 : 1, gpus.front().dev.get());
 
     std::vector<CategoryPlan> plans;
     if (cpu_engine) {
