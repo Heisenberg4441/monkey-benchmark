@@ -47,6 +47,40 @@ KERNEL_HD inline uint64_t contrib(uint64_t i, uint64_t r) {
     return r == 0 ? 0 : fmix64(fmix64(i) ^ r);
 }
 
+// --- Подсчёт нулевых битов (x != 0) -----------------------------------------------
+
+KERNEL_HD inline int clz64(uint64_t x) {
+#if defined(__CUDA_ARCH__)
+    return __clzll(static_cast<long long>(x));
+#elif defined(__GNUC__) || defined(__clang__)
+    return __builtin_clzll(x);
+#elif defined(_MSC_VER)
+    unsigned long idx = 0;
+    _BitScanReverse64(&idx, x);
+    return 63 - static_cast<int>(idx);
+#else
+    int n = 0;
+    while (!(x & (1ull << 63))) { x <<= 1; ++n; }
+    return n;
+#endif
+}
+
+KERNEL_HD inline int ctz64(uint64_t x) {
+#if defined(__CUDA_ARCH__)
+    return __ffsll(static_cast<long long>(x)) - 1;
+#elif defined(__GNUC__) || defined(__clang__)
+    return __builtin_ctzll(x);
+#elif defined(_MSC_VER)
+    unsigned long idx = 0;
+    _BitScanForward64(&idx, x);
+    return static_cast<int>(idx);
+#else
+    int n = 0;
+    while (!(x & 1)) { x >>= 1; ++n; }
+    return n;
+#endif
+}
+
 // --- Старшая половина произведений ---------------------------------------------
 
 KERNEL_HD inline uint32_t mulhi32(uint32_t a, uint32_t b) {

@@ -121,3 +121,46 @@ heavy compute workloads (BBP, Miller-Rabin) where per-op cost dwarfs this delta;
 `brute` (the search the project is named for) is unchanged. The delta is
 arm64/Apple-clang-specific and untested on x86 — Phase 6 CI re-measures on
 `x86-64-v3` and the result will be appended here before claiming parity.
+
+---
+
+# Suite v1 conversion (2026-10)
+
+Machine for every measurement below unless noted: Apple M4 Pro (10P + 4E,
+14 threads), macOS 27.0, Apple clang 21, Release, no `-march=native`.
+Baseline is master `61bc279`; the audit numbers are in `docs/ROADMAP.md` §0.4.
+
+## Miller-Rabin: Montgomery kernel
+
+The kernel moved from `(a·b) % n` on `unsigned __int128` (GCC/Clang) or a
+bit-serial add-and-double loop (MSVC/CUDA) to Montgomery REDC with R = 2^64
+(`workloads/arith.h`). Witness 2 uses left-to-right exponentiation where
+multiplying by the base is a modular doubling; R^2 mod n is only computed for
+numbers that survive witness 2.
+
+Kernel microbenchmark, 1 thread, 2^20 consecutive odd n above 2^k, best of 5,
+same prime counts for old and new:
+
+| n ≈ | old, native `__int128 %` | new, native `mulhi64` | speedup |
+| --- | --- | --- | --- |
+| 2^20 | 319 ns | 110 ns | ×2.9 |
+| 2^32 | 543 ns | 151 ns | ×3.6 |
+| 2^48 | 759 ns | 211 ns | ×3.6 |
+| 2^62 | 655 ns | 264 ns | ×2.5 |
+
+The path MSVC and CUDA used to take (no `__int128`), emulated on clang with
+`-U__SIZEOF_INT128__ -DMONKEY_PORTABLE_ARITH`:
+
+| n ≈ | old, bit-serial mulmod | new, 32-bit-limb `mulhi64` | speedup |
+| --- | --- | --- | --- |
+| 2^20 | 1028 ns | 223 ns | ×4.6 |
+| 2^62 | 5788 ns | 384 ns | ×15.1 |
+
+The bit-serial loop costs grow with the bit length of n, so the "×4.5" quoted
+in the audit holds only for small n. It was also wrong for n ≥ 2^63
+(97 % wrong products in the audit probe).
+
+End to end (old timed engine, `-w miller-rabin -t 1`): 6.62 → 16.6 M ops/s at
+`-d 1`, 5.75 → 15.9 M ops/s at `-d 6`. The drift with duration is still there,
+because this engine still walks n upward from 0. It disappears with the fixed
+2^62 window in suite v1.
