@@ -1,12 +1,10 @@
 #include "workload_extra.h"
 
+#include "pi_digits.h"
 #include "workloads/bbp_kernel.h"
 #include "workloads/miller_rabin_kernel.h"
 
 #include <cstdint>
-#include <cstring>
-#include <fstream>
-#include <vector>
 
 namespace monkey {
 
@@ -14,48 +12,38 @@ namespace monkey {
 // BBPPiWorkload
 // ---------------------------------------------------------------------------
 
-void BBPPiWorkload::prepare(const Config& cfg) {
-    seed_ = cfg.seed;
+kernel::BbpParams BBPPiWorkload::default_window() {
+    kernel::BbpParams p{};
+    p.positions = 1024;
+    p.pos0 = pi_hex_count() - 8 - p.positions; // 8 цифр последней позиции есть в файле
+    p.block_terms = 4096;
+    const uint64_t pos_max = p.pos0 + p.positions - 1;
+    p.blocks = static_cast<uint32_t>((pos_max + p.block_terms) / p.block_terms);
+    return p;
+}
 
-    // Загрузка эталонных hex-знаков π.
-    std::ifstream f("reference/pi_hex.txt");
-    if (f.is_open()) {
-        std::string content((std::istreambuf_iterator<char>(f)),
-                             std::istreambuf_iterator<char>());
-        for (char c : content) {
-            if (c >= '0' && c <= '9')
-                pi_digits_.push_back(static_cast<uint8_t>(c - '0'));
-            else if (c >= 'a' && c <= 'f')
-                pi_digits_.push_back(static_cast<uint8_t>(c - 'a' + 10));
-            else if (c >= 'A' && c <= 'F')
-                pi_digits_.push_back(static_cast<uint8_t>(c - 'A' + 10));
-        }
-    }
+void BBPPiWorkload::prepare(const Config&) {
+    p_ = default_window();
+    units_ = static_cast<uint64_t>(p_.positions) * p_.blocks;
 }
 
 void BBPPiWorkload::execute_batch(Counter counter_start, uint64_t batch_size,
                                   WorkloadResult& out) const {
     const uint64_t start = counter_lo(counter_start);
-    uint64_t done = 0;
     for (uint64_t i = 0; i < batch_size; ++i) {
-        const uint64_t d = start + i;
-        ++done;
-        const int digit = kernel::bbp_hex_digit(d);
-        out.checksum ^= static_cast<uint64_t>(digit) << (static_cast<uint64_t>(i) & 63u);
+        const uint64_t u = (start + i) % units_;
+        out.checksum += kernel::contrib(u, kernel::bbp_unit(p_, u));
     }
-    out.iterations += done;
+    out.iterations += batch_size;
 }
 
 bool BBPPiWorkload::verify() const {
-    if (pi_digits_.empty()) return false;
-
-    // Сверяем первые 1024 знака.
-    constexpr uint64_t kCheck = 1024;
-    const uint64_t limit = (pi_digits_.size() < kCheck) ? pi_digits_.size() : kCheck;
-    for (uint64_t d = 0; d < limit; ++d) {
-        if (kernel::bbp_hex_digit(d) != static_cast<int>(pi_digits_[d])) {
-            return false;
-        }
+    // Полные суммы позиций 0..63 (все блоки + хвост) против встроенного π,
+    // по 8 цифр на позицию.
+    for (uint64_t d = 0; d < 64; ++d) {
+        uint64_t s = kernel::bbp_tail(d);
+        for (uint64_t k0 = 0; k0 <= d; k0 += p_.block_terms) s += kernel::bbp_terms(d, k0, k0 + p_.block_terms);
+        if (kernel::bbp_digits(s) != pi_hex_word(d)) return false;
     }
     return true;
 }
@@ -74,7 +62,7 @@ void MillerRabinWorkload::execute_batch(Counter counter_start, uint64_t batch_si
         const uint64_t n = start + i;
         ++done; // каждый counter — одна операция, включая n < 2
         if (kernel::miller_rabin_is_prime(n)) {
-            out.checksum ^= n;
+            out.checksum += kernel::contrib(n, 1); // order-independent Σ mod 2^64
         }
     }
     out.iterations += done;

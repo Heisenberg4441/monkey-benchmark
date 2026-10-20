@@ -6,8 +6,6 @@
 // On GCC/Clang host (where __uint128_t is available) the native type is used
 // as Counter; on MSVC and in CUDA __device__ code a custom struct provides
 // the same semantics with add / mul-u64 / divmod-u32.
-//
-// Also provides mulmod64 (64-bit modular multiplication) for BBP / Miller-Rabin.
 
 #if defined(__CUDACC__)
 #define U128_HD __host__ __device__
@@ -102,25 +100,6 @@ U128_HD inline Counter counter_divmod(Counter n, uint32_t d, uint32_t* rem) {
 }
 
 #endif // Counter
-
-// -----------------------------------------------------------------------
-// mulmod64: (a * b) % m without 128-bit overflow. Portable everywhere.
-// -----------------------------------------------------------------------
-U128_HD inline uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t m) {
-#if defined(__SIZEOF_INT128__) && !defined(__CUDACC__) && !defined(_MSC_VER)
-    return static_cast<uint64_t>((static_cast<__uint128_t>(a) * b) % m);
-#else
-    if (m == 0) return 0;
-    uint64_t r = 0;
-    a %= m;
-    while (b) {
-        if (b & 1u) { r += a; if (r >= m) r -= m; }
-        a <<= 1u; if (a >= m) a -= m;
-        b >>= 1u;
-    }
-    return r;
-#endif
-}
 
 } // namespace monkey
 

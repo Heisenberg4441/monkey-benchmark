@@ -33,7 +33,7 @@ void worker(unsigned tid, unsigned total, const Config& cfg, Control& ctrl,
         counter = counter + stride;
     }
     ctrl.cpu_counters.record(tid, res.iterations);
-    ctrl.checksum.fetch_xor(res.checksum, std::memory_order_relaxed);
+    ctrl.checksum.fetch_add(res.checksum, std::memory_order_relaxed); // Σ mod 2^64
 }
 
 } // namespace

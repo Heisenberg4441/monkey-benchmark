@@ -4,13 +4,15 @@
 #include <vector>
 
 #include "workload.h"
+#include "workloads/bbp_kernel.h"
 
 namespace monkey {
 
-// BBP workload: вычисляет hex-знаки π через формулу Bailey-Borwein-Plouffe.
-// Каждый counter = позиция hex-знака (0 — первое после запятой).
-// Тяжёлая арифметика (modular exponentiation + double-series) делает этот
-// workload вычислительно-насыщенным, в отличие от monkey (только PRNG + memcmp).
+// BBP workload: вычисляет hex-знаки π через формулу Bailey-Borwein-Plouffe
+// (целочисленный fixed-point, workloads/bbp_kernel.h). Counter = единица работы
+// «блок из K членов одной позиции окна» (по модулю размера окна).
+// Тяжёлая арифметика (Montgomery-возведение + деление столбиком) делает этот
+// workload вычислительно-насыщенным, в отличие от monkey (только PRNG + сравнение).
 class BBPPiWorkload : public IWorkload {
 public:
     const char* name() const override { return "bbp"; }
@@ -19,9 +21,12 @@ public:
                        WorkloadResult& out) const override;
     bool verify() const override;
 
+    // Окно по умолчанию: последние позиции встроенного pi_hex.txt.
+    static kernel::BbpParams default_window();
+
 private:
-    uint32_t seed_ = 0;
-    std::vector<uint8_t> pi_digits_; // эталонные hex-знаки (reference/pi_hex.txt)
+    kernel::BbpParams p_{};
+    uint64_t units_ = 1; // positions · blocks
 };
 
 // Miller-Rabin workload: тест простоты 64-битных целых.

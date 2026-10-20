@@ -33,11 +33,23 @@ find_package(Threads REQUIRED)
 # --- Workloads (что считает бенч) ------------------------------------------
 # Статическая библиотека, общая для бинаря и тестов: реализации IWorkload и
 # header-only ядра (__host__ __device__) в src/workloads/.
+# Эталонные цифры π встраиваются в бинарь: BBP проверяется независимо от CWD.
+set(PI_HEX_HEADER ${CMAKE_BINARY_DIR}/gen/pi_hex_data.h)
+add_custom_command(
+    OUTPUT ${PI_HEX_HEADER}
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/reference/pi_hex.txt
+            -DOUT=${PI_HEX_HEADER} -P ${CMAKE_SOURCE_DIR}/cmake/embed_pi.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/reference/pi_hex.txt ${CMAKE_SOURCE_DIR}/cmake/embed_pi.cmake
+    COMMENT "Встраивание reference/pi_hex.txt"
+    VERBATIM)
+
 add_library(monkey_workloads STATIC
     src/workload.cpp
     src/workload_monkey.cpp
-    src/workload_extra.cpp)
-target_include_directories(monkey_workloads PUBLIC src)
+    src/workload_extra.cpp
+    src/pi_digits.cpp
+    ${PI_HEX_HEADER})
+target_include_directories(monkey_workloads PUBLIC src PRIVATE ${CMAKE_BINARY_DIR}/gen)
 if(MONKEY_PORTABLE_ARITH)
     target_compile_definitions(monkey_workloads PUBLIC MONKEY_PORTABLE_ARITH)
 endif()

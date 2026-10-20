@@ -164,3 +164,30 @@ End to end (old timed engine, `-w miller-rabin -t 1`): 6.62 → 16.6 M ops/s at
 `-d 1`, 5.75 → 15.9 M ops/s at `-d 6`. The drift with duration is still there,
 because this engine still walks n upward from 0. It disappears with the fixed
 2^62 window in suite v1.
+
+## BBP: integer fixed-point kernel
+
+`double` series + 128-bit `mulmod64` replaced by a uint64 fixed-point sum
+(ulp 2^-64), 32-bit Montgomery powers of 16 for four moduli in lockstep (ILP),
+and two-limb long division for each term. No FP64 — Apple GPUs have none
+(`shaderFloat64 = false` on MoltenVK).
+
+One full position, 1 thread:
+
+| Kernel | d | s / position |
+| --- | --- | --- |
+| old, `double` + `__int128 %` | 999 984 – 999 999 | 0.674 |
+| new, Montgomery, ×16 as a Montgomery multiply (shipped) | 999 000 | 0.098 |
+| new, ×16 as four modular doublings | 999 000 | 0.106 |
+| new, hardware `%` instead of Montgomery | 999 000 | 0.093 |
+
+All three new variants produce the identical 64-bit sum. Hardware `%` is 5 %
+faster on M4 Pro, but 64-bit `div` is much slower on many x86 cores and is
+emulated on GPUs, so the Montgomery variant ships as the single kernel for
+all backends. The `MONKEY_PORTABLE_ARITH` build runs at the same speed
+(0.098 s): this kernel only needs 32×32→64 products.
+
+Accuracy: 8 hex digits per position match `reference/pi_hex.txt` for
+positions 0–2047 and at both ends of the suite window near 10^6 (`test_bbp`).
+The digits are now embedded in the binary, so BBP no longer depends on the
+current directory.
