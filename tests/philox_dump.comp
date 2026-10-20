@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 // Тестовый шейдер: выгружает index_stream(seed, key, pos) в SSBO для первых
-// N входов. Использует тот же src/philox.glsl, что и боевой monkey.comp, поэтому
+// N входов. Использует тот же src/philox.glsl, что и боевой shaders/kernels.comp, поэтому
 // сравнение результата с CPU-эталоном (test_vulkan_philox) проверяет реальный
 // скомпилированный SPIR-V, а не его C++-транслитерацию.
 

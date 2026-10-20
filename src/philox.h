@@ -8,7 +8,7 @@
 //
 // Полностью stateless: выход определяется только (counter, key). Один и тот же
 // алгоритм дословно реализован на CPU (этот заголовок), в CUDA (этот же
-// заголовок под nvcc) и в GLSL (src/monkey.comp). При одинаковых входах все
+// заголовок под nvcc) и в GLSL (src/philox.glsl, src/shaders/kernels.comp). При одинаковых входах все
 // три бэкенда дают БИТ-В-БИТ идентичную последовательность — это проверяется
 // тестами test_philox / test_glsl_philox против опубликованных KAT-векторов.
 
@@ -64,7 +64,7 @@ PRNG_HD constexpr u32x4 philox4x32_10(u32x4 ctr, u32x2 key) {
 
 // Удобная свёртка для бенчмарка: поток случайных uint32 по входу
 // (seed, key, pos). Маппинг counter={key,pos,0,0}, philox-key={seed,0}
-// продублирован один-в-один в GLSL (src/monkey.comp).
+// продублирован один-в-один в GLSL (src/philox.glsl).
 PRNG_HD constexpr uint32_t index_stream(uint32_t seed, uint32_t key, uint32_t pos) {
     const u32x4 ctr{{key, pos, 0u, 0u}};
     const u32x2 k{{seed, 0u}};

@@ -18,7 +18,7 @@ single global `atomicAdd` per block.
 - Apple Silicon, 14 logical cores (`hw.ncpu = 14`), macOS.
 - `-DNATIVE_ARCH=OFF -DCMAKE_BUILD_TYPE=Release`, Vulkan via MoltenVK.
 - Workload: `random` mode, reference = `"The quick brown fox jumps over the lazy
-  dog"` (len 43, alphabet 27), `-t 14 -d 3`, 3 runs each.
+  dog"` (len 43, alphabet 28; earlier versions of this file said 27), `-t 14 -d 3`, 3 runs each.
 
 ### End-to-end throughput (random, 14 threads, default batch 8192)
 
@@ -317,3 +317,51 @@ the score table). The spread between runs is larger, for two reasons:
   5.24–5.29 s. A plausible cause is thermal state, or which P-core cluster
   the single thread lands on. It was not isolated further, and the effect on
   the overall score stays below 1.3 %.
+
+## CPU+GPU row (`run --all`)
+
+The combined row shares one chunk dispatcher between the CPU threads and the
+GPU. With 14 CPU workers on 14 cores the GPU host thread could not submit
+dispatches in time, and the combined row was slower than the GPU alone. One
+core is now left to the host thread (GPU work sizes, `--quick`):
+
+| Test | GPU alone | CPU+GPU, 14 workers | CPU+GPU, 13 workers |
+| --- | --- | --- | --- |
+| monkey-random | 4.81 G/s | 4.32 G/s | 5.22 G/s |
+| bbp-pi | 2.00 M blocks/s | 1.62 M blocks/s | 1.93 M blocks/s |
+
+bbp-pi stays slightly below the GPU alone. CPU and GPU share one power and
+thermal budget on the M4 Pro, and with the CPU fully loaded the GPU clocks
+lower. The row is informational and gets no score.
+
+## Summary: master `61bc279` vs suite v1
+
+Same machine. "Before" numbers come from the audit (`docs/ROADMAP.md` §0.4).
+"After" numbers come from the reference medians (`t_ref`, `src/suite_v1.h`).
+
+| Workload | Config | before | after | note |
+| --- | --- | --- | --- | --- |
+| monkey random, fox | CPU 1 thread | 131 M/s | 152 M/s | +16 %; the candidate map is now canonical and every hit is checksummed |
+| monkey random, fox | CPU 14 threads | 1.28 G/s | 1.54 G/s | +20 % |
+| monkey random, fox | GPU (Vulkan) | avg 5.22 G/s, **median 0**, CV 265 % | 4.89 G/s, run CV ≤ 0.2 % | before: different candidates than the CPU, ~1 s dispatches |
+| monkey brute, fox | CPU 1 / 14 threads | did not run (n^len > 2^128) | 1.76 / 16.9 G/s | 64-bit index |
+| monkey brute | GPU (Vulkan) | 32-bit index wrapped; target > 2^32 never found | 10.4 G/s; `jihgfedcba` found at index 9 876 543 210 in 1.1 s | |
+| BBP, digit position ~10^6 | CPU 1 thread | 0.674 s / position | 0.102 s / position | ×6.6, integer fixed point, verified against pi_hex.txt |
+| BBP | CPU 14 threads | `-d 2` ran > 5 min (stop only between 8192-digit batches) | 99 positions/s | |
+| BBP | GPU (Vulkan) | GPU ignored `--workload` (computed monkey) | 531 positions/s | no FP64 needed |
+| Miller-Rabin | CPU 1 thread | 6.62 → 5.75 M/s depending on `-d` (n grew from 0) | 3.78 M/s at n ≈ 2^62, flat | per number at 2^62: 655 → 264 ns |
+| Miller-Rabin | CPU 14 threads | 55 M/s (small n) | 37.4 M/s at n ≈ 2^62 | |
+| Miller-Rabin | GPU (Vulkan) | ignored `--workload` | 91 M/s | step-wise lane machine |
+| any | correctness | MR declared 4033 and 4681 prime; BBP checksum depended on the batch size; nothing verified | every result checked against golden values, `verify` on every backend | |
+
+The "after" Miller-Rabin rates are lower than the "before" ones on purpose. The
+old numbers tested small n (from 0 upward); the suite tests a fixed window of
+62-bit odd numbers, where every number costs the same.
+
+## Stress mode
+
+`run --stress -d 6 --test mr-prime64` (single pass of each window, smoke check
+of the mode): CPU-ST 3.39 M/s, CPU-MT 37.4 M/s, GPU 85.3 M/s. Every pass was
+valid, and `throttle_ratio` stayed at 0.994–1.001 over 6 s. A long run
+(`-d 60` or more) is the tool for seeing the thermal drift of GPU
+Miller-Rabin described above; no such long run was recorded here.

@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/C++-17-blue.svg" />
   <img src="https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM64-green.svg" />
-  <img src="https://img.shields.io/badge/Accelerator-CUDA-76B900.svg" />
+  <img src="https://img.shields.io/badge/GPU-CUDA%20%7C%20Vulkan-76B900.svg" />
   <img src="https://img.shields.io/badge/License-MIT-lightgrey.svg" />
 </p>
 
@@ -11,240 +11,286 @@
   <b>English</b> · <a href="README.ru.md">Русский</a>
 </p>
 
-A cross-platform compute benchmark built around the Infinite Monkey Theorem. The program either generates random strings or deterministically enumerates the combination space until it matches a reference text, measuring sustained throughput in operations per second (Ops/sec).
+A cross-platform CPU and GPU compute benchmark. Run it with no arguments and it
+runs a fixed suite of integer workloads on one CPU thread, on all CPU threads and
+on every available GPU API (CUDA, Vulkan). Every result is checked against golden
+values built into the binary, and the run ends with scores and a JSON report that
+can go to a leaderboard. The name comes from the original workload: monkeys
+typing random text until they hit a reference string.
 
-The benchmark is designed to evaluate CPU and GPU performance on a task with predictable, tunable computational complexity — parameterized by alphabet size and string length. This makes it straightforward to compare architectures and to observe how throughput scales as the entropy of the input changes.
+```text
+$ monkey_bench
+monkey_bench 1.0.0 (…) · suite v1 · standard
+CPU:  Apple M4 Pro · 14 threads (10P + 4E) · 24.0 GiB · macOS 27.0 arm64
+GPU:  Apple M4 Pro · Vulkan (MoltenVK 1.4.2, u64 native) · init 0.04 s
+…
+Scores — suite v1, standard (3 runs per test, median), 1000 = Apple M4 Pro (10P+4E), macOS 27.0, MoltenVK 1.4.2
+
+Test                      CPU-ST          CPU-MT      GPU Vulkan
+monkey-random         1055 ±0.4%      1001 ±0.1%      1000 ±0.1%
+monkey-brute          1034 ±0.3%       999 ±0.1%       998 ±0.2%
+bbp-pi                1041 ±0.2%       999 ±0.1%       997 ±0.1%
+mr-prime64            1001 ±0.0%       999 ±0.2%       999 ±0.1%
+Category                    1033            1000             998
+
+CPU score:        1016   geomean(CPU-ST, CPU-MT)
+GPU score:         998   best API: GPU Vulkan
+Overall score:    1010   geomean(CPU-ST, CPU-MT, GPU)
+```
 
 ---
 
-## Table of Contents
+## Contents
 
-- [Theory](#theory)
-- [Features](#features)
+- [Quick start](#quick-start)
+- [What suite v1 measures](#what-suite-v1-measures)
+- [Scores and how to read them](#scores-and-how-to-read-them)
+- [Methodology](#methodology)
+- [Commands](#commands)
+- [JSON report](#json-report)
 - [Building](#building)
-  - [CPU Backend](#cpu-backend)
-  - [CUDA Backend](#cuda-backend)
-- [Usage](#usage)
-- [Locale Benchmark Methodology](#locale-benchmark-methodology)
-- [Architecture](#architecture)
-- [Vision & Roadmap](#vision--roadmap)
+- [The original monkey search (custom mode)](#the-original-monkey-search-custom-mode)
 - [Limitations](#limitations)
-- [License](#license)
 
 ---
 
-## Theory
+## Quick start
 
-According to the Infinite Monkey Theorem, a random sequence of characters generated for an unbounded amount of time will almost surely contain any given finite text.
+Download the archive for your platform from the releases page and run:
 
-The probability that a random string of length `L` over an alphabet of cardinality `N` matches the reference is:
+```bash
+./monkey_bench                       # standard suite: 3 runs per test, ~4 min
+./monkey_bench --quick               # 1 run per test, ~1.5 min (same work, comparable)
+./monkey_bench run --json result.json
+./monkey_bench verify                # check every kernel on every backend
+```
 
-$$P = \frac{1}{N^L}$$
+- **Windows / Linux x86_64:** CUDA (NVIDIA) and Vulkan (any GPU) are built in.
+- **Linux arm64:** Vulkan.
+- **macOS arm64:** Vulkan through MoltenVK, shipped as `libMoltenVK.dylib` next
+  to the binary. Unpacked binaries are quarantined by Gatekeeper; run
+  `xattr -dr com.apple.quarantine .` in the folder.
 
-The expected number of attempts before the first match is `N^L`. Thus alphabet size and string length define the computational complexity of the task, while the measured quantity is the sustained rate at which candidates are generated and compared per unit of time.
+Only a normal GPU driver is needed. Without a Vulkan or CUDA driver the binary
+still runs the CPU categories and says why the GPU is unavailable.
 
-The benchmark captures how throughput varies with alphabet cardinality (locale) and character properties (single- vs. multi-byte), reflecting the memory and arithmetic behavior of the target platform under load.
+For a stable result, close heavy applications and plug laptops in.
 
----
+## What suite v1 measures
 
-## Features
+Four tests. Each one processes a fixed range of work units `[0, N)`, and every
+unit costs about the same. The score is computed from the time this fixed work
+takes. N differs per category so that each test runs 3–10 s on the reference
+machine.
 
-- **Two operating modes**
-  - `random` — Monte Carlo. Each thread independently generates random strings. No shared state between threads and zero coordination overhead.
-  - `brute` — deterministic enumeration. The combination space is treated as a number in base `N`; threads split it into disjoint ranges and are guaranteed to cover the entire space without repeats.
-- **Minimal hot-loop allocations.** Working buffers are allocated once per thread before the loop; inside the loop memory is only overwritten.
-- **UTF-8 support.** Processing happens at the level of Unicode characters rather than bytes: Latin, Cyrillic, CJK ideographs, and emoji are parsed and compared correctly.
-- **Dynamic alphabet construction.** The alphabet is derived from the unique characters of the reference file, which makes preparing different-locale scenarios trivial.
-- **Heterogeneous backends, any GPU.** A single C++17 core runs on the CPU (x86_64 with AVX2/AVX-512, ARM64 with NEON), on NVIDIA GPUs via **CUDA**, and on any other GPU (AMD / Intel / Apple) via **Vulkan compute**. All backends run the *same* counter-based PRNG — **Philox4x32-10** (Salmon et al., SC'11) — implemented once and shared verbatim across CPU, CUDA and GLSL, so the generated streams are bit-identical (see [Determinism](#determinism)). The GPU API is chosen automatically — NVIDIA → CUDA, otherwise → Vulkan — and can be forced with `--gpu-api`.
+| Test | Work unit | What it stresses | Result checked against |
+| --- | --- | --- | --- |
+| `monkey-random` | one random 43-character candidate for *“The quick brown fox jumps over the lazy dog”* (alphabet 28) drawn from Philox4x32-10; result = length of the matched prefix | 32-bit multiply/xor throughput, short data-dependent loops | golden checksum |
+| `monkey-brute` | the index written in base 28 and padded to 43 digits; result = length of the matched suffix | 64-bit integer division throughput | golden checksum |
+| `bbp-pi` | a block of 256 terms of the Bailey–Borwein–Plouffe series for hex digits of π near position 10⁶ | 32-bit Montgomery modular exponentiation, long division, instruction-level parallelism | 8 hex digits of every position vs the embedded `reference/pi_hex.txt`, plus a golden checksum |
+| `mr-prime64` | deterministic Miller–Rabin test of one odd number above 2⁶² | 64-bit Montgomery multiplication (`mulhi`), branchy control flow (SIMD divergence on GPUs) | golden prime count + checksum, cross-checked with a segmented sieve |
 
----
+All arithmetic is integer, and it is defined so that a given work unit has
+exactly one bit-exact result on every CPU and GPU. There is no floating point:
+FP64 results differ between devices, and Apple GPUs have no FP64 at all.
+
+`monkey_bench list` prints the exact work per category and the reference times.
+
+## Scores and how to read them
+
+- **Test score** = `1000 × t_ref / t`. Here `t` is the median time of the runs
+  and `t_ref` is the time on the reference machine (Apple M4 Pro, 10P + 4E,
+  macOS 27.0, its GPU through MoltenVK 1.4.2). A score of 2000 means the test
+  ran twice as fast as on the reference machine.
+- **Category score** = geometric mean of its four tests. The categories are
+  CPU-ST (one thread), CPU-MT (all logical threads) and GPU, scored once per
+  available API (GPU CUDA, GPU Vulkan). Every API uses the same work and the
+  same `t_ref`.
+- **CPU score** = geomean(CPU-ST, CPU-MT). **GPU score** = the best GPU API.
+- **Overall score** = geomean(CPU-ST, CPU-MT, GPU). It is not computed on a
+  machine without a GPU: there it would not be comparable. The report marks
+  that run `partial`.
+- **±x %** next to a score is the coefficient of variation of the run times.
+  Above 3 % the test is marked `unstable` (`*`). The score still counts, but
+  the result is noisy: thermal throttling, background load, power saving.
+- **INVALID** means a checksum, a prime count or a π digit did not match the
+  golden value. That test gets no score, and neither do its category and the
+  overall score.
+- **Comparability.** Scores are comparable only within the same
+  `suite_version`. Any change to a kernel, a work size or a golden value bumps
+  it. The report also marks itself not comparable for custom runs, stress runs,
+  debug builds and `-march=native` builds.
+
+Geometric means keep one exceptional test from dominating a category. Doubling
+one of four tests raises the category by 19 %, not by 25 %.
+
+## Methodology
+
+**Fixed work, not "how much in N seconds".** Each test has a fixed number of
+work units, and the clock measures how long they take. An older version
+counted operations per second for a set duration. There the cost of an
+operation grew with the counter (Miller–Rabin, BBP), so the result depended on
+the duration and the thread count.
+
+**One session per device.** CPU threads and GPU contexts are created once. For
+every test and category, the engine then runs:
+
+1. **Warmup**, 2 s (1 s in `--quick`). Clocks ramp up and the chunk size is
+   tuned to ~15 ms per CPU chunk and ~30 ms per GPU dispatch. That is far from
+   the 2 s Windows TDR limit, and a stop takes effect within one chunk.
+2. **Measured runs**, 3 in `--standard` and 1 in `--quick`. All workers start
+   on a common barrier. Time runs on `steady_clock` until the last chunk
+   finishes. Device initialization is reported separately (`init_time_s`) and
+   is never part of a measurement.
+
+**Shared chunk dispatcher.** Work is handed out in chunks by a single atomic
+compare-and-swap per chunk, not one per operation. The CPU threads and the GPU
+share one dispatcher in `--all`: nothing is computed twice, and faster devices
+simply take more chunks.
+
+**Order-independent checksums.** The result of unit `i` enters
+`Σ fmix64(fmix64(i) ⊕ r) mod 2⁶⁴` (splitmix64 finalizer; units with an empty
+result `r = 0` contribute nothing). The sum does not depend on thread count,
+chunk size or execution order, so the CPU threads and GPU dispatches can add
+up their parts. The processed count and the number of non-empty results are
+checked as well.
+
+**Same operations on every backend.** Each workload is one header-only kernel
+(`src/workloads/*_kernel.h`, `__host__ __device__` for CUDA) with a
+line-by-line GLSL port (`src/shaders/`). The GLSL is compiled in two variants:
+native `uint64_t` (`shaderInt64`) and a `uvec2` emulation for devices without
+it. `test_parity` and `monkey_bench verify` check that CPU, CUDA and both Vulkan
+variants return identical results for fixed ranges.
+
+**Hybrid CPUs.** On macOS benchmark threads run at the highest QoS, so CPU-ST
+stays on a performance core. On Linux and Windows threads are not pinned and
+the OS scheduler decides. The report records the P/E core counts.
+
+**Stress mode.** `run --stress -d 60` repeats each test's fixed window for 60 s
+per test and category and verifies every completed pass. It reports throughput
+over time and `throttle_ratio`, the throughput of the last 10 % of the time
+over the first 10 %. It gives no scores; use it for thermal and stability
+analysis.
+
+**Run-to-run stability** of the overall score on the reference machine is
+documented in [BENCH.md](BENCH.md).
+
+## Commands
+
+```text
+monkey_bench [run] [options]          run the suite and print scores
+monkey_bench list                     list the suite tests
+monkey_bench info                     system, build and compute devices
+monkey_bench verify [options]         check every kernel on every backend
+monkey_bench custom [file] [options]  custom workload: ops/s only, not comparable
+monkey_bench <file> [options]         legacy syntax, same as custom
+```
+
+| `run` option | Meaning |
+| --- | --- |
+| `--standard` / `--quick` / `--stress` | 3 runs per test (default), 1 run, or timed stress |
+| `--cpu` / `--gpu` / `--all` | CPU categories, GPU categories, or both plus an informational CPU+GPU row |
+| `--gpu-api auto\|cuda\|vulkan` | GPU APIs to test (default: every available one) |
+| `--test NAME` | run only this test (repeatable); category scores need all four |
+| `-d, --duration SEC` | stress: seconds per test and category (default 30) |
+| `--json FILE` | write the JSON v2 report (`-` for stdout) |
+| `--vk-allow-cpu` | allow software Vulkan devices such as Mesa lavapipe |
+
+Exit codes: `0` success, `1` usage or backend error (the run stops with a
+message instead of hanging), `2` a result did not match its golden value.
+
+## JSON report
+
+`--json FILE` writes a report that follows
+[`bench_output.schema.json`](bench_output.schema.json) (schema v2). CI validates
+it with `check-jsonschema`. It contains:
+
+- `schema_version`, `suite_version`, `mode`, `timestamp`;
+- `binary`: version, git sha, compiler, flags, build type;
+- `system`: OS, kernel, CPU model, physical/logical/performance/efficiency
+  cores, RAM;
+- `devices`: API, name, vendor, driver, compute units, 64-bit mode, init time;
+- `tests[]`: run times, median/min/max/CV, ops/s, checksum and expected
+  checksum, validity, score, chunk size, work split between CPU and GPU;
+- `scores`: categories, CPU, GPU, overall;
+- `flags`: `comparable`, `custom`, `debug_build`, `native_arch`,
+  `portable_arith`, `invalid`, `unstable`, `partial`.
+
+Checksums are hex strings: JSON numbers lose precision above 2⁵³.
 
 ## Building
-
-The project builds with CMake. The CUDA backend is enabled automatically if a CUDA Toolkit is detected; otherwise only the CPU variant is built.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+ctest --test-dir build
 ```
 
-Resulting binary: `build/monkey_bench`.
+- **Vulkan** is built in when the Vulkan headers and `glslangValidator` are
+  found (Vulkan SDK; on Linux `libvulkan-dev glslang-tools`; on macOS
+  `brew install vulkan-headers vulkan-loader glslang molten-vk`). The Vulkan
+  loader is opened at run time, so the binary does not depend on it.
+- **CUDA** is built in when a CUDA Toolkit (11+) is found; the runtime is
+  linked statically.
 
-### CPU Backend
+| CMake option | Default | Meaning |
+| --- | --- | --- |
+| `USE_CUDA` / `USE_VULKAN` | `ON` | enable the backend if its SDK is found |
+| `MONKEY_NATIVE_ARCH` | `OFF` | `-march=native`; such builds are flagged as not comparable |
+| `MONKEY_PORTABLE_ARITH` | `OFF` | force the portable 32-bit paths of the kernels (what MSVC and GLSL use); CI runs the tests this way too |
+| `MONKEY_BUILD_TESTS` | `ON` | Catch2 unit tests, backend parity tests and CLI smoke tests |
 
-The CPU variant has no extra dependencies. CMake enables `-O3` and `-march=native` (when the compiler supports it) automatically, so no separate Clang/GCC/MSVC commands are required.
+`tools/suite_gen.cpp` (`cmake --build build --target monkey_suite_gen`)
+regenerates the golden values of the suite.
 
-### CUDA Backend
+CI builds and tests on Linux x86_64 and arm64 (Vulkan via Mesa lavapipe),
+Windows x86_64 (MSVC), macOS arm64 (MoltenVK) and a build with the portable
+arithmetic. It also compiles the CUDA backend.
 
-The benchmark supports execution on NVIDIA GPUs via CUDA. Each candidate maps to a single CUDA thread, providing massive parallelism in `random` mode and dense coverage of the combination space in `brute` mode.
+## The original monkey search (custom mode)
 
-Requirements:
-
-- CUDA Toolkit 11.0 or newer
-- A GPU with Compute Capability 6.0+
-- An NVIDIA driver compatible with the installed Toolkit
-
-If the Toolkit is installed, the same build command picks it up automatically. Target GPU architectures can be overridden when needed:
+The infinite monkey theorem: a random sequence of characters typed forever
+almost surely contains any given text. A random string of length `L` over an
+alphabet of `N` characters matches the reference with probability `1/N^L`.
+Custom mode runs that search on your own reference file until an exact match is
+found or the time runs out:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
-cmake --build build
+./monkey_bench custom reference.txt -m random -d 10   # random candidates, 10 s
+./monkey_bench custom reference.txt -m brute -gpu     # enumerate the space on the GPU
+./monkey_bench reference.txt -all -d 10               # legacy syntax: CPU + GPU together
+./monkey_bench custom -w bbp -d 10                    # suite kernels, timed
 ```
 
-CUDA can be force-disabled with `-DUSE_CUDA=OFF`.
-
-### Vulkan Backend
-
-For non-NVIDIA GPUs (AMD, Intel, Apple via MoltenVK) the benchmark uses a Vulkan compute backend. CMake enables it automatically when a Vulkan SDK and a GLSL compiler (`glslangValidator` or `glslc`) are found; the GLSL shader is compiled to SPIR-V and embedded into the binary.
-
-Requirements:
-
-- Vulkan SDK (headers + loader) and `glslangValidator`/`glslc` to **build**
-- At runtime, only a Vulkan-capable GPU driver (which ships the loader; Windows 10+ also bundles it)
-
-Vulkan can be force-disabled with `-DUSE_VULKAN=OFF`.
-
-The prebuilt release binaries for Windows and Linux already include **both** CUDA and Vulkan, so on any machine with a GPU it just works — no SDK needed.
-
-### Runtime backend selection
-
-`-cpu` / `-gpu` / `-all` choose the load; `--gpu-api auto|cuda|vulkan` chooses the GPU API. The default `auto` picks **CUDA on NVIDIA and Vulkan on any other GPU**, and falls back to the CPU if no GPU is available. On startup the chosen device is printed. Forcing the API lets you compare CUDA vs Vulkan on the same card.
-
----
-
-## Usage
-
-```bash
-./build/monkey_bench [OPTIONS] <reference_file>
-```
-
-| Option | Description |
-| --- | --- |
-| `-w`, `--workload <monkey>` | What to compute. Default: `monkey`. More workloads (`bbp`, `miller-rabin`) are being added. |
-| `-m`, `--mode <random\|brute>` | Operating mode (monkey workload). Default: `random`. |
-| `-b`, `--backend <cpu\|gpu\|all>` | Target load. Default: `cpu`. |
-| `-cpu` / `-gpu` / `-all` | Short aliases for `--backend`. |
-| `--gpu-api <auto\|cuda\|vulkan>` | GPU API. Default `auto` (NVIDIA → CUDA, else Vulkan). Force a backend to compare them on the same card. |
-| `-t`, `--threads <N>` | Number of CPU threads. Default: all cores. |
-| `-d`, `--duration <sec>` | Stop after N seconds (benchmark mode). |
-| `--warmup <sec>` | Stabilisation time before measurement (default: 2 sec). |
-| `--output-format <text\|json>` | Output format. Default `text`. `json` for CI / leaderboard. |
-| `--seed <N>` | Seed for the counter-based PRNG (reproducible runs). Default: fixed constant. |
-| `--batch-size <N>` | Hot-loop iterations between counter syncs (CPU flush interval; GPU iters/thread per dispatch). Default: 8192. |
-| `-h`, `--help` | Argument help. |
-
-The `-all` mode runs the CPU and GPU backends simultaneously and reports combined throughput with a per-device breakdown. Because an exact match is practically unreachable for long strings, use `--duration` for measurements: the program runs for the given time and reports a stable Ops/sec figure.
-
-```bash
-# Measure on CPU for 10 seconds
-./build/monkey_bench reference.txt -cpu -d 10
-
-# Combined CPU + GPU load
-./build/monkey_bench reference.txt -all -d 10
-
-# Deterministic enumeration of a short string on the GPU
-./build/monkey_bench reference.txt -m brute -gpu
-```
-
----
-
-## Measurement Methodology
-
-Every benchmark run goes through two phases:
-
-1. **Warmup** (`--warmup <sec>`, default 2 s). Workers run at full load but no samples are recorded. This lets CPU frequency governors, GPU clocks, and caches stabilise.
-2. **Measurement** (`--duration <sec>`). The reporter samples Ops/sec every **100 ms**. The sample is computed as `Δattempts / Δtime` over the interval, not as a cumulative average — this captures transient throughput, not a smoothed figure that hides noise.
-3. After the measurement window, the sample vector yields **min, median, mean, p95, p99, max, standard deviation, and the coefficient of variation (CV)**.
-4. If CV > 5% the tool emits a warning: the measurement is likely disturbed by thermal throttling, background load, or GPU power-state transitions.
-
-JSON output (`--output-format json`) includes all statistics in a structured format validated against [`bench_output.schema.json`](bench_output.schema.json). This is the canonical format for CI ingestion and the planned leaderboard.
-
-**Reproducibility.** Every run with the same `--seed` and identical reference / workload / batch-size produces the same sequence of PRNG outputs and therefore the same counter trajectory. The seed is fixed by default (`0x9e3779b9`).
-
-## Locale Benchmark Notes
-
-A common use case is comparing how a platform handles locales with different alphabet cardinalities and per-character byte widths. Prepare reference files of equal character length from different writing systems.
-
-Example references of 5–10 characters:
-
-| File | Content | Script | Alphabet size | Bytes per char |
-| --- | --- | --- | --- | --- |
-| `en.txt` | `HelloWorld` | Latin | ~26 | 1 |
-| `ru.txt` | `ПриветМир` | Cyrillic | ~33 | 2 |
-| `jp.txt` | `日本語テスト` | Kanji/Kana | large | 3 |
-| `emoji.txt` | `🚀🌍💡🔥💻` | Emoji | large | 4 |
-
-Run in `random` mode with a fixed measurement window for each file:
-
-```bash
-./build/monkey_bench en.txt -m random -d 10
-./build/monkey_bench ru.txt -m random -d 10
-./build/monkey_bench jp.txt -m random -d 10
-./build/monkey_bench emoji.txt -m random -d 10
-```
-
-**Important.** Absolute Ops/sec values for *different* reference files are NOT directly comparable — alphabet cardinality, bytes-per-character, and string-length-in-bytes all differ simultaneously. The correct comparison is **relative**: compare CPU vs GPU on the *same* file, or observe how a single platform's throughput degrades as the reference grows. Cross-platform localisation methodology is being formalised in [Future Work](#vision--roadmap).
-
----
-
-## Architecture
-
-### Random Mode
-
-Each thread keeps a local buffer the size of the reference. In a loop:
-
-1. The buffer is filled with alphabet indices drawn from the shared Philox4x32-10 counter-based PRNG (see [Determinism](#determinism)). The candidate's `(seed, key, position)` maps directly to a counter — no per-thread generator state.
-2. The candidate is compared character by character against the reference.
-3. On a mismatch the buffer is overwritten without new allocations.
-4. Each thread keeps its attempt count in a register and periodically (every `--batch-size` iterations) publishes a snapshot to its own cache-line-padded slot. The hot loop performs no atomic read-modify-write on shared memory; the main thread sums the per-thread snapshots to print statistics. See [BENCH.md](BENCH.md) for the contention this avoids.
-
-### Brute Force Mode
-
-The string is treated as a number in base `N`, where `N` is the alphabet cardinality:
-
-1. Threads split the numeric space into disjoint chunks.
-2. The starting number of each chunk is converted into a character combination.
-3. Enumeration proceeds by carry-propagating increment.
-4. This guarantees no duplicated work between threads and full coverage of the space.
-
-### CUDA Backend
-
-On the GPU, work is laid out across a grid of blocks and threads. In `random` mode each thread evaluates the same Philox4x32-10 generator over its own counter range (no cuRAND, no per-thread RNG state) and checks candidates in registers. In `brute` mode the global thread index maps to an offset in the numeric space, giving deterministic coverage. Attempt counters are aggregated via atomic operations and on-device reduction, minimizing global-memory traffic.
-
-### Determinism
-
-The PRNG is the counter-based **Philox4x32-10** (J. Salmon, M. Moraes, R. Dror, D. Shaw, *"Parallel Random Numbers: As Easy as 1, 2, 3"*, SC'11; reference implementation: Random123). It is stateless: each output is a pure function of a 128-bit counter and a 64-bit key, which makes it trivially parallelizable and identical regardless of device.
-
-A single implementation lives in [`src/philox.h`](src/philox.h) (used by CPU and, via `__host__ __device__`, by CUDA) and a line-for-line GLSL port in [`src/philox.glsl`](src/philox.glsl) (shared by the Vulkan shader). The claim that all backends produce identical streams is backed by tests, not assertion:
-
-- `test_philox` — published known-answer vectors (Random123 `kat_vectors`).
-- `test_glsl_philox` — the GLSL port compared to the CPU canon over 2¹⁶ outputs.
-- `test_vulkan_philox` — the **real compiled SPIR-V** dispatched on a Vulkan device (Mesa lavapipe in CI) vs the CPU canon.
-- `test_cuda_philox` — the same check on a CUDA device.
-
-Runs are reproducible: the seed is fixed by default and configurable with `--seed`.
-
----
-
-## Vision & Roadmap
-
-The long-term goal of this project is to grow from a narrow "monkey" test into an **extensible benchmarking platform for computationally hard search problems**. In the same way that computing the digits of π became a canonical stress test, the aim is to provide a standardized set of "search-solvable" tasks and a unified metric for comparing CPUs and GPUs.
-
-Planned directions:
-
-- **Pluggable workloads.** A "task" abstraction on top of the enumeration/search engine — string matching is just the first workload. Next: numeric search, conjecture checking, hash preimages, combinatorial spaces.
-- **π-style numeric tasks.** Workloads with a verifiable reference result (digits of constants, prime/perfect-number search, counterexamples) where a "match" is a found solution.
-- **Comparable scoring.** A single performance figure normalized by task difficulty, suitable for cross-machine leaderboards.
-- **More backends.** Beyond CUDA: ROCm/HIP, SYCL, and multi-node execution.
-
----
+The alphabet is the set of distinct UTF-8 characters of the reference, and the
+hot path compares alphabet indices. Throughput therefore depends only on the
+alphabet size and the string length. The script (Latin, Cyrillic, CJK, emoji)
+and the bytes per character do not matter. Brute force uses a 64-bit index:
+references whose code exceeds 2⁶⁴ cannot be found by enumeration, and the
+program says so. Custom runs report ops/s from completed chunks and are never
+comparable with suite scores.
 
 ## Limitations
 
-- In `random` mode, finding an exact match for long or high-entropy strings is practically unreachable: the expected time grows as `N^L`. To verify correctness (that it actually stops on a match), use short strings of 3–5 characters.
-- `brute` mode uses a 128-bit index (portable `Counter` type, `__uint128_t` on GCC/Clang, custom on MSVC/CUDA), so spaces up to ~3.4×10³⁸ candidates are supported.
-
----
+- **Integer compute only.** The suite exercises integer ALU, multiply, divide
+  and branch throughput. It does not measure memory bandwidth, caches, floating
+  point or I/O. It is not a general-purpose replacement for Geekbench or
+  SPEC.
+- **One reference machine.** Scores are relative to an Apple M4 Pro. Its GPU
+  runs through MoltenVK (Vulkan on Metal); native Metal is out of scope, and
+  MoltenVK overhead may undervalue Apple GPUs a little.
+- **Fixed GPU work.** GPU tests are sized for ~5 s on the reference GPU. A slow
+  integrated GPU takes proportionally longer; software Vulkan (lavapipe) would
+  take hours, so CI checks GPUs with `verify` instead of a full run.
+- **CUDA is verified in CI by compilation only.** No NVIDIA GPU was available
+  while developing suite v1. On an NVIDIA machine run `monkey_bench verify`
+  once: it compares the CUDA results with the golden values.
+- **Microarchitecture sensitivity is intended.** For example, `monkey-brute`
+  depends on 64-bit division throughput, which differs several-fold between
+  CPU cores and is emulated on GPUs.
+- **Laptops and hybrid CPUs.** Thermal limits and scheduling on hybrid CPUs
+  outside macOS add noise. Watch the `unstable` flag, and use `--stress` to see
+  throttling.
 
 ## License
 

@@ -1,5 +1,5 @@
 // Philox4x32-10 для GLSL — дословный перенос src/philox.h. Подключается и
-// боевым шейдером (monkey.comp), и тестовым дампом (tests/philox_dump.comp),
+// боевым шейдером (shaders/kernels.comp), и тестовым дампом (tests/philox_dump.comp),
 // поэтому обе цели гарантированно используют один и тот же код PRNG.
 // Бит-в-бит совпадение с CPU проверяется тестами test_glsl_philox /
 // test_vulkan_philox.
