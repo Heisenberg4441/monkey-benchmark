@@ -22,6 +22,7 @@ monkey_add_test(test_kernels test_kernels.cpp)
 monkey_add_test(test_bbp test_bbp.cpp)
 monkey_add_test(test_miller_rabin test_miller_rabin.cpp)
 monkey_add_test(test_arith test_arith.cpp)
+monkey_add_test(test_engine test_engine.cpp)
 # Паритет бэкендов: GPU-исполнители против эталонного CPU. Без SDK — заглушки,
 # тест делает WARN и проходит.
 monkey_add_test(test_parity test_parity.cpp)

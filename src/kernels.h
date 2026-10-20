@@ -72,6 +72,15 @@ uint64_t bbp_units(const kernel::BbpParams& p);
 RangeResult cpu_run_range(const KernelParams& p, uint64_t begin, uint64_t count,
                           uint64_t* bbp_acc);
 
+// Итог BBP-окна: полные суммы позиций (блоки + хвост) -> 8 hex-цифр, сверка со
+// встроенным π. checksum = Σ contrib(позиция, цифры); expected — то же по файлу.
+struct BbpVerdict {
+    uint32_t bad_positions = 0;
+    uint64_t checksum = 0;
+    uint64_t expected = 0;
+};
+BbpVerdict bbp_verify(const kernel::BbpParams& p, const std::vector<uint64_t>& acc);
+
 // Самопроверка ядра перед запуском: известные ответы, без зависимостей от
 // файлов. false — бенч не запускается.
 bool kernel_selfcheck(const KernelParams& p, std::string* why);

@@ -124,6 +124,19 @@ RangeResult cpu_run_range(const KernelParams& p, uint64_t begin, uint64_t count,
     return {};
 }
 
+BbpVerdict bbp_verify(const kernel::BbpParams& p, const std::vector<uint64_t>& acc) {
+    BbpVerdict v;
+    for (uint32_t w = 0; w < p.positions; ++w) {
+        const uint64_t d = p.pos0 + w;
+        const uint32_t got = kernel::bbp_digits((w < acc.size() ? acc[w] : 0) + kernel::bbp_tail(d));
+        const uint32_t want = pi_hex_word(d);
+        v.bad_positions += got != want;
+        v.checksum += kernel::contrib(d, got);
+        v.expected += kernel::contrib(d, want);
+    }
+    return v;
+}
+
 namespace {
 
 bool fail(std::string* why, const char* msg) {

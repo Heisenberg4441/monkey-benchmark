@@ -53,9 +53,12 @@ add_custom_command(
 
 add_library(monkey_workloads STATIC
     src/kernels.cpp
+    src/engine.cpp
+    src/runner.cpp
     src/pi_digits.cpp
     ${PI_HEX_HEADER})
 target_include_directories(monkey_workloads PUBLIC src PRIVATE ${CMAKE_BINARY_DIR}/gen)
+target_link_libraries(monkey_workloads PUBLIC Threads::Threads)
 if(MONKEY_PORTABLE_ARITH)
     target_compile_definitions(monkey_workloads PUBLIC MONKEY_PORTABLE_ARITH)
 endif()
