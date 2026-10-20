@@ -22,6 +22,10 @@ monkey_add_test(test_kernels test_kernels.cpp)
 monkey_add_test(test_bbp test_bbp.cpp)
 monkey_add_test(test_miller_rabin test_miller_rabin.cpp)
 monkey_add_test(test_arith test_arith.cpp)
+# Паритет бэкендов: GPU-исполнители против эталонного CPU. Без SDK — заглушки,
+# тест делает WARN и проходит.
+monkey_add_test(test_parity test_parity.cpp)
+target_link_libraries(test_parity PRIVATE monkey_vulkan monkey_cuda)
 
 # --- Слой 2: реальный прогон SPIR-V на Vulkan-устройстве --------------------
 # Собирается только если есть Vulkan SDK и компилятор GLSL. В рантайме тест сам

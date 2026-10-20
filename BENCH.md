@@ -217,3 +217,36 @@ The random gain (+21 %) recovers the Phase-3 regression documented above
 is now a plain loop over `monkey_random_prefix`, and the call is no longer
 virtual. Brute costs ~1.04 64-bit divisions per candidate. M4 Pro pipelines
 independent `udiv`s, so it runs at ~0.56 ns per candidate on one core.
+
+## Vulkan: one shader for all kernels, two 64-bit variants
+
+`src/shaders/kernels.comp` ports all four kernels line by line; the kernel is
+a specialization constant. 64-bit arithmetic goes through `u64.glsl`, which
+is compiled twice: `uint64_t` (`shaderInt64`) and `uvec2` emulation. 64/32
+division is Hacker's Delight `divlu` on 32-bit ops in both variants.
+`test_parity` checks both variants against `cpu_run_range` on MoltenVK (all
+11 cases, 3 different dispatch splits each).
+
+Sustained throughput, M4 Pro via MoltenVK 1.4.2, ~25–120 ms dispatches, 3 s:
+
+| Kernel | u64 native | u64 emulated |
+| --- | --- | --- |
+| monkey-random (fox) | 4.83 G/s | 4.69 G/s |
+| monkey-brute (fox) | 10.4 G/s | 9.50 G/s |
+| bbp (blocks of 1024 terms near 10^6) | 0.447 M/s | 0.448 M/s |
+| miller-rabin (odd n above 2^62) | 39.7 M/s | 33.2 M/s |
+
+Device init (instance, device, all four pipelines): 0.36 s native, 0.07 s
+emulated (second run, warm pipeline cache). Init is now excluded from the
+measurement window: the device is created once and reused for the warmup.
+
+Honest notes:
+- monkey-random was 5.15 G/s on the old shader at `--batch-size 128`. The
+  new one is 6 % slower. It now computes the canonical candidate from a
+  64-bit index and adds every hit to the checksum. The old shader computed
+  different candidates (per-thread seeds) and checked nothing.
+- miller-rabin on the GPU is no faster than 14 CPU threads. About 78 % of
+  32-lane SIMD groups contain at least one prime, and a prime runs all 7
+  witnesses, so lanes that drew composites sit idle. A per-lane state
+  machine that keeps all lanes busy is the next optimization (before the
+  t_ref calibration, so scores stay comparable).

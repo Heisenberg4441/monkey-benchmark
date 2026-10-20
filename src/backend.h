@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "counters.h"
+#include "gpu_device.h"
 #include "kernels.h"
 
 namespace monkey {
@@ -36,6 +37,7 @@ struct Config {
 struct Control {
     std::atomic<bool> found{false};
     std::atomic<bool> stop{false};
+    std::atomic<bool> failed{false};     // ошибка бэкенда: прогон недействителен
     AttemptCounters cpu_counters;        // per-thread снимки (без contention)
     std::atomic<unsigned long long> gpu_attempts{0};
     std::atomic<unsigned long long> checksum{0}; // агрегат результата (антидот DCE)
@@ -47,14 +49,8 @@ std::vector<std::string> split_utf8(const std::string& str);
 // CPU-бэкенд: запускает cfg.threads воркеров, блокируется до ctrl.stop.
 void run_cpu(const Config& cfg, Control& ctrl);
 
-// CUDA-бэкенд. Реализация в cuda_backend.cu (USE_CUDA) либо заглушка в
-// cuda_stub.cpp. cuda_available() сообщает, доступен ли GPU в рантайме.
-bool cuda_available();
-void run_cuda(const Config& cfg, Control& ctrl);
-
-// Vulkan-бэкенд (любой GPU: AMD/Intel/Apple/NVIDIA). Реализация в
-// vulkan_backend.cpp (USE_VULKAN) либо заглушка в vulkan_stub.cpp.
-bool vulkan_available();
-void run_vulkan(const Config& cfg, Control& ctrl);
+// GPU-прогон поверх GpuDevice (Vulkan или CUDA), блокируется до ctrl.stop.
+// Ошибка устройства выставляет ctrl.failed и ctrl.stop.
+void run_gpu(GpuDevice& dev, const Config& cfg, Control& ctrl);
 
 } // namespace monkey

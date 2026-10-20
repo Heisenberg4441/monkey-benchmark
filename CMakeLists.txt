@@ -30,6 +30,13 @@ option(MONKEY_PORTABLE_ARITH "Переносимые 32-битные пути а
 
 find_package(Threads REQUIRED)
 
+# MSVC иначе перекодирует UTF-8 литералы в системную кодовую страницу (cp1251).
+# Для C++ — напрямую; для CUDA — через -Xcompiler, иначе nvcc принимает /utf-8
+# за свой аргумент и падает на разборе командной строки.
+if(MSVC)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8> $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
+endif()
+
 # --- Workloads (что считает бенч) ------------------------------------------
 # Статическая библиотека, общая для бинаря и тестов: описание kernel'ов и
 # эталонный CPU-исполнитель (kernels.cpp) поверх header-only ядер
@@ -53,79 +60,85 @@ if(MONKEY_PORTABLE_ARITH)
     target_compile_definitions(monkey_workloads PUBLIC MONKEY_PORTABLE_ARITH)
 endif()
 
-# --- Базовый таргет (CPU всегда) -------------------------------------------
-add_executable(monkey_bench src/main.cpp src/cpu_backend.cpp)
-target_link_libraries(monkey_bench PRIVATE Threads::Threads monkey_workloads)
+# --- Vulkan-бэкенд ----------------------------------------------------------
+# Библиотека monkey_vulkan: исполнитель диапазонов (vulkan_device.cpp) и SPIR-V
+# src/shaders/kernels.comp в двух вариантах — uint64_t (shaderInt64) и uvec2.
+# Без SDK или glslangValidator — заглушка с понятной ошибкой в рантайме.
+find_package(Vulkan)
+set(MONKEY_HAS_VULKAN OFF)
+if(USE_VULKAN AND Vulkan_FOUND)
+    if(Vulkan_GLSLANG_VALIDATOR_EXECUTABLE)
+        set(GLSLANG ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
+    else()
+        find_program(GLSLANG NAMES glslangValidator HINTS ENV VULKAN_SDK PATH_SUFFIXES bin Bin)
+    endif()
+    if(GLSLANG)
+        set(MONKEY_HAS_VULKAN ON)
+    else()
+        message(STATUS "Vulkan найден, но нет glslangValidator — Vulkan отключён")
+    endif()
+endif()
+
+if(MONKEY_HAS_VULKAN)
+    message(STATUS "Vulkan найден: GPU-бэкенд (любой GPU) включён")
+    set(KERNELS_COMP ${CMAKE_SOURCE_DIR}/src/shaders/kernels.comp)
+    set(KERNELS_DEPS ${KERNELS_COMP} ${CMAKE_SOURCE_DIR}/src/shaders/u64.glsl
+        ${CMAKE_SOURCE_DIR}/src/shaders/arith.glsl ${CMAKE_SOURCE_DIR}/src/philox.glsl)
+    set(SPV_HEADERS "")
+    foreach(variant native emu)
+        set(out ${CMAKE_BINARY_DIR}/gen/kernels_${variant}_spv.h)
+        if(variant STREQUAL "native")
+            set(defs -DU64_NATIVE)
+        else()
+            set(defs "")
+        endif()
+        add_custom_command(
+            OUTPUT ${out}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/gen
+            COMMAND ${GLSLANG} -V --target-env vulkan1.1 ${defs} -I${CMAKE_SOURCE_DIR}/src
+                    --vn kernels_${variant}_spv -o ${out} ${KERNELS_COMP}
+            DEPENDS ${KERNELS_DEPS}
+            COMMENT "Компиляция kernels.comp (${variant}) -> SPIR-V"
+            VERBATIM)
+        list(APPEND SPV_HEADERS ${out})
+    endforeach()
+    add_library(monkey_vulkan STATIC src/vulkan_device.cpp ${SPV_HEADERS})
+    target_include_directories(monkey_vulkan PRIVATE ${CMAKE_BINARY_DIR}/gen)
+    target_link_libraries(monkey_vulkan PUBLIC monkey_workloads Vulkan::Vulkan)
+else()
+    message(STATUS "Vulkan не найден или отключён")
+    add_library(monkey_vulkan STATIC src/vulkan_stub.cpp)
+    target_link_libraries(monkey_vulkan PUBLIC monkey_workloads)
+endif()
 
 # --- CUDA-бэкенд ------------------------------------------------------------
 include(CheckLanguage)
 check_language(CUDA)
+set(MONKEY_HAS_CUDA OFF)
 if(USE_CUDA AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
+    set(MONKEY_HAS_CUDA ON)
     message(STATUS "CUDA найден: GPU-бэкенд (NVIDIA) включён")
-    target_sources(monkey_bench PRIVATE src/cuda_backend.cu)
-    target_compile_definitions(monkey_bench PRIVATE USE_CUDA)
-    set_target_properties(monkey_bench PROPERTIES
+    add_library(monkey_cuda STATIC src/cuda_device.cu)
+    target_link_libraries(monkey_cuda PUBLIC monkey_workloads)
+    set_target_properties(monkey_cuda PROPERTIES
         CUDA_STANDARD 17
-        CUDA_SEPARABLE_COMPILATION ON
         # Статический CUDA-рантайм: пользователю нужен лишь драйвер NVIDIA.
         CUDA_RUNTIME_LIBRARY Static)
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set_target_properties(monkey_bench PROPERTIES CUDA_ARCHITECTURES "75-real;86-real;89-real;90-real")
+        set_target_properties(monkey_cuda PROPERTIES CUDA_ARCHITECTURES "75-real;86-real;89-real;90-real")
     endif()
 else()
     message(STATUS "CUDA не найден или отключён")
-    target_sources(monkey_bench PRIVATE src/cuda_stub.cpp)
+    add_library(monkey_cuda STATIC src/cuda_stub.cpp)
+    target_link_libraries(monkey_cuda PUBLIC monkey_workloads)
 endif()
 
-# --- Vulkan-бэкенд ----------------------------------------------------------
-find_package(Vulkan)
-if(USE_VULKAN AND Vulkan_FOUND)
-    # Компилятор GLSL->SPIR-V: предпочитаем glslangValidator, иначе glslc.
-    if(Vulkan_GLSLANG_VALIDATOR_EXECUTABLE)
-        set(GLSL_COMPILER ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
-    else()
-        find_program(GLSL_COMPILER NAMES glslangValidator glslc
-                     HINTS ENV VULKAN_SDK PATH_SUFFIXES bin Bin)
-    endif()
-    if(GLSL_COMPILER)
-        message(STATUS "Vulkan найден: GPU-бэкенд (любой GPU) включён")
-        set(SPV_HEADER ${CMAKE_BINARY_DIR}/gen/monkey_comp_spv.h)
-        if(GLSL_COMPILER MATCHES "glslc")
-            set(GLSL_CMD ${GLSL_COMPILER} -mfmt=c -o ${SPV_HEADER}
-                ${CMAKE_SOURCE_DIR}/src/monkey.comp)
-        else()
-            set(GLSL_CMD ${GLSL_COMPILER} -V --vn monkey_comp_spv
-                -o ${SPV_HEADER} ${CMAKE_SOURCE_DIR}/src/monkey.comp)
-        endif()
-        add_custom_command(
-            OUTPUT ${SPV_HEADER}
-            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/gen
-            COMMAND ${GLSL_CMD}
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/monkey.comp
-            COMMENT "Компиляция monkey.comp -> SPIR-V"
-            VERBATIM)
-        target_sources(monkey_bench PRIVATE src/vulkan_backend.cpp ${SPV_HEADER})
-        target_include_directories(monkey_bench PRIVATE ${CMAKE_BINARY_DIR}/gen)
-        target_compile_definitions(monkey_bench PRIVATE USE_VULKAN)
-        target_link_libraries(monkey_bench PRIVATE Vulkan::Vulkan)
-    else()
-        message(STATUS "Vulkan найден, но нет glslangValidator/glslc — Vulkan отключён")
-        target_sources(monkey_bench PRIVATE src/vulkan_stub.cpp)
-    endif()
-else()
-    message(STATUS "Vulkan не найден или отключён")
-    target_sources(monkey_bench PRIVATE src/vulkan_stub.cpp)
-endif()
-
-# --- Флаги компилятора ------------------------------------------------------
-# MSVC иначе перекодирует UTF-8 литералы в системную кодовую страницу (cp1251).
-# Для C++ — напрямую; для CUDA — через -Xcompiler, иначе nvcc принимает /utf-8
-# за свой аргумент и падает на разборе командной строки.
-if(MSVC)
-    target_compile_options(monkey_bench PRIVATE
-        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
+# --- Бинарь -----------------------------------------------------------------
+add_executable(monkey_bench src/main.cpp src/cpu_backend.cpp src/gpu_backend.cpp)
+target_link_libraries(monkey_bench PRIVATE Threads::Threads monkey_workloads monkey_vulkan monkey_cuda)
+if(MONKEY_HAS_CUDA)
+    set_target_properties(monkey_bench PROPERTIES CUDA_RUNTIME_LIBRARY Static)
 endif()
 
 # Linux: статически линкуем libstdc++/libgcc, чтобы бинарник не зависел от
@@ -141,11 +154,13 @@ if(MONKEY_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# -march=native только для нативных (не кросс, не релизных) сборок CPU.
+# -march=native только для нативных (не кросс, не релизных) сборок CPU. Горячие
+# циклы живут в monkey_workloads (kernels.cpp), поэтому флаг — и на неё.
 if(MONKEY_NATIVE_ARCH)
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
     if(HAS_MARCH_NATIVE)
+        target_compile_options(monkey_workloads PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-march=native>)
         target_compile_options(monkey_bench PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-march=native>)
     endif()
 endif()

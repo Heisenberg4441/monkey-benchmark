@@ -1,12 +1,16 @@
-#include "backend.h"
+#include "gpu_device.h"
 
 // Заглушка, собирается когда проект скомпилирован без CUDA Toolkit.
-// Сигнализирует, что GPU-бэкенд недоступен; вызывающий код делает откат на CPU.
 
 namespace monkey {
 
-bool cuda_available() { return false; }
+bool cuda_compiled() { return false; }
 
-void run_cuda(const Config&, Control&) {}
+std::unique_ptr<GpuDevice> create_cuda_device(const CudaOptions&, std::string* err) {
+    if (err) *err = "cuda: this binary was built without CUDA";
+    return nullptr;
+}
+
+std::vector<std::string> list_cuda_devices() { return {}; }
 
 } // namespace monkey

@@ -1,0 +1,249 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#ifdef U64_NATIVE
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#endif
+
+// Все kernel'ы suite для Vulkan: построчные порты src/workloads/*_kernel.h.
+// Kernel выбирается specialization-константой KERNEL (KernelId в kernels.h) —
+// драйвер компилирует только нужную ветку. Каждый поток обрабатывает индексы
+// begin + gid + step·total (step < steps, индекс < begin + count); итог
+// workgroup'ы {checksum, hits, count, first_full} редуцируется в shared memory
+// и пишется одним слотом — 64-битные атомики не нужны (на MoltenVK их нет).
+
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint KERNEL = 0u;
+
+#include "philox.glsl"
+#include "shaders/u64.glsl"
+#include "shaders/arith.glsl"
+
+layout(std430, binding = 0) readonly buffer TargetBuf { int target[]; };
+layout(std430, binding = 1) writeonly buffer PartialBuf { uint partials[]; }; // 8 uint на группу
+layout(std430, binding = 2) buffer BbpAccBuf { uint bbp_acc[]; };             // (lo, hi) на позицию
+
+layout(push_constant) uniform PC {
+    uint begin_lo, begin_hi;
+    uint count_lo, count_hi;
+    uint steps;
+    uint seed;
+    uint n;
+    uint len;
+    uint mr_base_lo, mr_base_hi;
+    uint mr_step_lo, mr_step_hi;
+    uint bbp_pos0;
+    uint bbp_block_terms;
+    uint bbp_blocks;
+} pc;
+
+// --- monkey (workloads/monkey_kernel.h) ---------------------------------------
+
+uint monkey_char(U64 i, uint pos) {
+    return philox4x32_10(uvec4(pos, u64_lo(i), u64_hi(i), 0u), uvec2(pc.seed, 0u)).x % pc.n;
+}
+
+uint monkey_random_prefix(U64 i) {
+    uint p = 0u;
+    while (p < pc.len && monkey_char(i, p) == uint(target[p])) ++p;
+    return p;
+}
+
+uint monkey_brute_suffix(U64 i) {
+    uint matched = 0u;
+    while (matched < pc.len) {
+        uint rem;
+        U64 q = u64_divmod32(i, pc.n, rem);
+        if (rem != uint(target[pc.len - 1u - matched])) break;
+        i = q;
+        ++matched;
+    }
+    return matched;
+}
+
+// --- bbp (workloads/bbp_kernel.h) ---------------------------------------------
+
+U64 bbp_frac(uint x, uint m) {
+    uint r1, r0;
+    uint q1 = divlu(x, 0u, m, r1);
+    uint q0 = divlu(r1, 0u, m, r0);
+    return u64(q0, q1);
+}
+
+U64 bbp_weighted(U64 t0, U64 t1, U64 t2, U64 t3) { // 4·T1 - 2·T4 - T5 - T6
+    return u64_sub(u64_sub(u64_sub(u64_shl(t0, 2u), u64_shl(t1, 1u)), t2), t3);
+}
+
+// d < 5.3·10^8, поэтому все k, d и знаменатели — 32-битные.
+U64 bbp_terms(uint d, uint k0, uint k1) {
+    U64 sum = u64(0u, 0u);
+    uint kend = min(k1, d);
+    for (uint k = k0; k < kend; ++k) {
+        uint m[4] = uint[4](8u * k + 1u, 2u * k + 1u, 8u * k + 5u, 4u * k + 3u);
+        const uint c[4] = uint[4](16u, 4u, 16u, 8u);
+        uint minv[4], r[4], r16[4];
+        for (int j = 0; j < 4; ++j) {
+            minv[j] = inv32(m[j]);
+            r[j] = (0u - m[j]) % m[j];
+            r16[j] = r[j];
+            for (int q = 0; q < 4; ++q) r16[j] = addmod32(r16[j], r16[j], m[j]);
+        }
+        uint f = d - k - 1u;
+        if (f != 0u) {
+            for (int bit = findMSB(f); bit >= 0; --bit) {
+                for (int j = 0; j < 4; ++j) r[j] = mont32_mul(r[j], r[j], m[j], minv[j]);
+                if (((f >> uint(bit)) & 1u) != 0u) {
+                    for (int j = 0; j < 4; ++j) r[j] = mont32_mul(r[j], r16[j], m[j], minv[j]);
+                }
+            }
+        }
+        U64 t[4];
+        for (int j = 0; j < 4; ++j) t[j] = bbp_frac(mont32_mul(r[j], c[j], m[j], minv[j]), m[j]);
+        sum = u64_add(sum, bbp_weighted(t[0], t[1], t[2], t[3]));
+    }
+    if (k0 <= d && d < k1) {
+        uint den[4] = uint[4](8u * d + 1u, 8u * d + 4u, 8u * d + 5u, 8u * d + 6u);
+        U64 t[4];
+        for (int j = 0; j < 4; ++j) t[j] = bbp_frac(1u % den[j], den[j]);
+        sum = u64_add(sum, bbp_weighted(t[0], t[1], t[2], t[3]));
+    }
+    return sum;
+}
+
+// --- miller-rabin (workloads/miller_rabin_kernel.h) ---------------------------
+
+U64 mr_pow(U64 base, U64 e, U64 n, U64 ninv, U64 one) {
+    U64 r = one;
+    while (!u64_is_zero(e)) {
+        if ((u64_lo(e) & 1u) != 0u) r = mont64_mul(r, base, n, ninv);
+        e = u64_shr(e, 1u);
+        if (!u64_is_zero(e)) base = mont64_mul(base, base, n, ninv);
+    }
+    return r;
+}
+
+U64 mr_pow2(U64 e, U64 n, U64 ninv, U64 one) {
+    U64 r = one;
+    for (int i = 63 - int(u64_clz(e)); i >= 0; --i) {
+        r = mont64_mul(r, r, n, ninv);
+        if (u64_bit(e, uint(i)) != 0u) r = addmod64(r, r, n);
+    }
+    return r;
+}
+
+bool mr_strong(U64 x, uint s, U64 n, U64 ninv, U64 one, U64 mone) {
+    if (u64_eq(x, one) || u64_eq(x, mone)) return true;
+    for (uint r = 1u; r < s; ++r) {
+        x = mont64_mul(x, x, n, ninv);
+        if (u64_eq(x, mone)) return true;
+        if (u64_eq(x, one)) return false;
+    }
+    return false;
+}
+
+bool miller_rabin_is_prime(U64 n) {
+    if (u64_lt(n, u64_from(2u))) return false;
+    if (u64_lt(n, u64_from(4u))) return true;
+    if ((u64_lo(n) & 1u) == 0u) return false;
+
+    U64 nm1 = u64_sub(n, u64_from(1u));
+    uint s = u64_ctz(nm1);
+    U64 d = u64_shr(nm1, s);
+    U64 ninv = inv64(n);
+    U64 one = pow2_64_mod(n);
+    U64 mone = u64_sub(n, one);
+
+    if (!mr_strong(mr_pow2(d, n, ninv, one), s, n, ninv, one, mone)) return false;
+
+    U64 r2 = one;
+    for (int i = 0; i < 64; ++i) r2 = addmod64(r2, r2, n);
+
+    const uint W[6] = uint[6](325u, 9375u, 28178u, 450775u, 9780504u, 1795265022u);
+    for (int w = 0; w < 6; ++w) {
+        // a mod n: при n >= 2^32 свидетель (< 2^32) уже меньше n.
+        uint a = (u64_hi(n) == 0u) ? W[w] % u64_lo(n) : W[w];
+        if (a == 0u) continue;
+        U64 am = mont64_mul(u64_from(a), r2, n, ninv);
+        if (!mr_strong(mr_pow(am, d, n, ninv, one), s, n, ninv, one, mone)) return false;
+    }
+    return true;
+}
+
+// --- обход индексов и редукция ------------------------------------------------
+
+shared uvec2 s_cs[256];
+shared uint s_hits[256];
+shared uint s_cnt[256];
+shared uvec2 s_ff[256];
+
+void main() {
+    uint lid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = gl_NumWorkGroups.x * 256u;
+    U64 begin = u64(pc.begin_lo, pc.begin_hi);
+    U64 count = u64(pc.count_lo, pc.count_hi);
+    U64 mr_base = u64(pc.mr_base_lo, pc.mr_base_hi);
+    U64 mr_step = u64(pc.mr_step_lo, pc.mr_step_hi);
+
+    U64 cs = u64(0u, 0u);
+    U64 ff = u64(0xFFFFFFFFu, 0xFFFFFFFFu);
+    uint hits = 0u, cnt = 0u;
+
+    for (uint st = 0u; st < pc.steps; ++st) {
+        U64 off = u64_add(u64_mul32(st, total), u64_from(gid));
+        if (!u64_lt(off, count)) break;
+        U64 i = u64_add(begin, off);
+        U64 r;
+        if (KERNEL == 0u) {
+            uint p = monkey_random_prefix(i);
+            r = u64_from(p);
+            if (p == pc.len && u64_lt(i, ff)) ff = i;
+        } else if (KERNEL == 1u) {
+            uint p = monkey_brute_suffix(i);
+            r = u64_from(p);
+            if (p == pc.len && u64_lt(i, ff)) ff = i;
+        } else if (KERNEL == 2u) {
+            uint u = u64_lo(i); // хост гарантирует positions·blocks < 2^32
+            uint w = u / pc.bbp_blocks;
+            uint k0 = (u - w * pc.bbp_blocks) * pc.bbp_block_terms;
+            r = bbp_terms(pc.bbp_pos0 + w, k0, k0 + pc.bbp_block_terms);
+            uint lo = u64_lo(r), hi = u64_hi(r);
+            uint old = atomicAdd(bbp_acc[2u * w], lo);
+            atomicAdd(bbp_acc[2u * w + 1u], hi + (old + lo < old ? 1u : 0u));
+        } else {
+            r = miller_rabin_is_prime(u64_add(mr_base, u64_mul(mr_step, i))) ? u64_from(1u)
+                                                                             : u64(0u, 0u);
+        }
+        ++cnt;
+        if (!u64_is_zero(r)) {
+            ++hits;
+            cs = u64_add(cs, contrib(i, r));
+        }
+    }
+
+    s_cs[lid] = uvec2(u64_lo(cs), u64_hi(cs));
+    s_hits[lid] = hits;
+    s_cnt[lid] = cnt;
+    s_ff[lid] = uvec2(u64_lo(ff), u64_hi(ff));
+    barrier();
+    for (uint half_ = 128u; half_ > 0u; half_ >>= 1) {
+        if (lid < half_) {
+            U64 a = u64(s_cs[lid].x, s_cs[lid].y), b = u64(s_cs[lid + half_].x, s_cs[lid + half_].y);
+            U64 sum = u64_add(a, b);
+            s_cs[lid] = uvec2(u64_lo(sum), u64_hi(sum));
+            s_hits[lid] += s_hits[lid + half_];
+            s_cnt[lid] += s_cnt[lid + half_];
+            U64 fa = u64(s_ff[lid].x, s_ff[lid].y), fb = u64(s_ff[lid + half_].x, s_ff[lid + half_].y);
+            if (u64_lt(fb, fa)) s_ff[lid] = s_ff[lid + half_];
+        }
+        barrier();
+    }
+    if (lid == 0u) {
+        uint o = gl_WorkGroupID.x * 8u;
+        partials[o + 0u] = s_cs[0].x;
+        partials[o + 1u] = s_cs[0].y;
+        partials[o + 2u] = s_hits[0];
+        partials[o + 3u] = s_cnt[0];
+        partials[o + 4u] = s_ff[0].x;
+        partials[o + 5u] = s_ff[0].y;
+    }
+}

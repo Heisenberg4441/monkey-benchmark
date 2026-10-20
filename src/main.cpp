@@ -55,6 +55,7 @@ struct Args {
     uint64_t batch_size = 8192;
     WorkloadType workload = WorkloadType::Monkey;
     OutputFormat output_format = OutputFormat::Text;
+    bool vk_allow_cpu = false;
 };
 
 void print_help(const char* prog) {
@@ -67,6 +68,7 @@ void print_help(const char* prog) {
         "  -b, --backend <cpu|gpu|all>   целевая нагрузка (default: cpu)\n"
         "      -cpu | -gpu | -all        короткие алиасы для --backend\n"
         "      --gpu-api <auto|cuda|vulkan>  выбор GPU-API (default: auto)\n"
+        "      --vk-allow-cpu            разрешить программный Vulkan (lavapipe)\n"
         "  -t, --threads <N>             число CPU-потоков (default: auto)\n"
         "  -d, --duration <sec>          остановиться через N секунд (бенчмарк)\n"
         "      --warmup <sec>            время стабилизации перед замером (default: 2)\n"
@@ -151,6 +153,7 @@ bool parse_args(int argc, char** argv, Args& args) {
             else if (v == "text") args.output_format = OutputFormat::Text;
             else { std::cerr << "Неизвестный формат вывода: " << v << "\n"; return false; }
         }
+        else if (a == "--vk-allow-cpu") args.vk_allow_cpu = true;
         else if (key == "--seed") {
             std::string v;
             if (!take_value(argc, argv, i, a, v)) { std::cerr << "Нет значения для " << key << "\n"; return false; }
@@ -392,21 +395,33 @@ int run(int argc, char** argv) {
     bool use_cpu = (cfg.backend == Backend::Cpu || cfg.backend == Backend::All);
     bool use_gpu = (cfg.backend == Backend::Gpu || cfg.backend == Backend::All);
 
-    void (*gpu_fn)(const Config&, Control&) = nullptr;
+    // GPU создаётся один раз и переживает прогрев: инициализация (instance,
+    // pipeline'ы, контекст) не попадает в окно замера. Явно запрошенный, но
+    // недоступный GPU — ошибка, а не тихий откат на CPU.
+    std::unique_ptr<GpuDevice> gpu;
     const char* gpu_label = "";
     if (use_gpu) {
-        bool want_cuda = (args.gpu_api == GpuApi::Auto || args.gpu_api == GpuApi::Cuda);
-        bool want_vulkan = (args.gpu_api == GpuApi::Auto || args.gpu_api == GpuApi::Vulkan);
-        if (want_cuda && cuda_available()) {
-            gpu_fn = run_cuda; gpu_label = "cuda";
-        } else if (want_vulkan && vulkan_available()) {
-            gpu_fn = run_vulkan; gpu_label = "vulkan";
+        const bool want_cuda = (args.gpu_api == GpuApi::Auto || args.gpu_api == GpuApi::Cuda);
+        const bool want_vulkan = (args.gpu_api == GpuApi::Auto || args.gpu_api == GpuApi::Vulkan);
+        std::string err_cuda, err_vk;
+        if (want_cuda) gpu = create_cuda_device(CudaOptions{}, &err_cuda);
+        if (!gpu && want_vulkan) {
+            VulkanOptions vo;
+            vo.allow_cpu_device = args.vk_allow_cpu;
+            gpu = create_vulkan_device(vo, &err_vk);
         }
-        if (!gpu_fn) {
-            std::cerr << "[warn] выбранный GPU-бэкенд недоступен, откат на CPU\n";
-            use_gpu = false;
-            use_cpu = true;
+        if (!gpu) {
+            std::cerr << "Ошибка: GPU недоступен";
+            if (!err_cuda.empty()) std::cerr << "\n  " << err_cuda;
+            if (!err_vk.empty()) std::cerr << "\n  " << err_vk;
+            std::cerr << "\n";
+            return 1;
         }
+        gpu_label = gpu->info().api == "cuda" ? "cuda" : "vulkan";
+        std::cerr << "[" << gpu_label << "] устройство: " << gpu->info().name << " | init "
+                  << gpu->info().init_time_s << " c";
+        if (!gpu->info().u64_mode.empty()) std::cerr << " | u64: " << gpu->info().u64_mode;
+        std::cerr << "\n";
     }
 
     if (args.output_format == OutputFormat::Text) {
@@ -431,7 +446,7 @@ int run(int argc, char** argv) {
 
         std::thread w_cpu, w_gpu;
         if (use_cpu) w_cpu = std::thread(run_cpu, std::cref(cfg), std::ref(warm_ctrl));
-        if (use_gpu) w_gpu = std::thread(gpu_fn, std::cref(cfg), std::ref(warm_ctrl));
+        if (use_gpu) w_gpu = std::thread(run_gpu, std::ref(*gpu), std::cref(cfg), std::ref(warm_ctrl));
 
         while (!warm_ctrl.stop.load(std::memory_order_acquire)) {
             double elapsed = std::chrono::duration<double>(
@@ -442,6 +457,10 @@ int run(int argc, char** argv) {
         }
         if (w_cpu.joinable()) w_cpu.join();
         if (w_gpu.joinable()) w_gpu.join();
+        if (warm_ctrl.failed.load()) {
+            std::cerr << "Ошибка: бэкенд упал на прогреве — бенч остановлен\n";
+            return 1;
+        }
     }
 
     // --- Измерение --------------------------------------------------------
@@ -450,7 +469,7 @@ int run(int argc, char** argv) {
 
     std::thread cpu_thr, gpu_thr;
     if (use_cpu) cpu_thr = std::thread(run_cpu, std::cref(cfg), std::ref(ctrl));
-    if (use_gpu) gpu_thr = std::thread(gpu_fn, std::cref(cfg), std::ref(ctrl));
+    if (use_gpu) gpu_thr = std::thread(run_gpu, std::ref(*gpu), std::cref(cfg), std::ref(ctrl));
 
     // Сэмплирование Ops/sec каждые ~100 мс.
     constexpr auto kSampleInterval = std::chrono::milliseconds(100);
@@ -490,6 +509,11 @@ int run(int argc, char** argv) {
 
     if (cpu_thr.joinable()) cpu_thr.join();
     if (gpu_thr.joinable()) gpu_thr.join();
+
+    if (ctrl.failed.load()) {
+        std::cerr << "\nОшибка: бэкенд упал во время замера — результат недействителен\n";
+        return 1;
+    }
 
     double total_time = std::chrono::duration<double>(
         std::chrono::high_resolution_clock::now() - measure_start).count();
