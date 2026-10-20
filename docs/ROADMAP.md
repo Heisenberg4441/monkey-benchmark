@@ -349,7 +349,7 @@ ctest зелёный после каждого коммита. Замеры «д
 | 1. Паритет ядер и checksum | ✅ | `fix(mr)`, `feat(kernels)`, `perf(mr)`, `feat(bbp)`, `feat(monkey)`, `feat(vulkan)`, `feat(cuda)`, `perf(mr): step-wise lane state machine` |
 | 2. Движок | ✅ | `feat(engine): device sessions, shared chunk dispatcher, …` |
 | 3. Suite v1, баллы, CLI, JSON v2 | ✅ | `feat(suite)`, `feat(vulkan): load the Vulkan runtime at run time`, калибровка `t_ref` |
-| 4. CI и релизы | ✅ (YAML), проверка — на пуше ветки | `ci: …` |
+| 4. CI и релизы | ✅ ветка `suite-v1` зелёная | `ci: …`, `feat(vulkan): MONKEY_DISABLE_VULKAN …` |
 | 5. Документация | ✅ | `docs: …` |
 
 Отклонения от плана §2, найденные по ходу:
@@ -365,3 +365,38 @@ ctest зелёный после каждого коммита. Замеры «д
 - **Алфавит строки fox — 28 символов, а не 27** (ошибка в постановке).
 - **Найден и исправлен баг движка**: диспетчер на `fetch_add` переполнялся у
   конца 64-битного пространства. Теперь CAS и регрессионный тест.
+
+### CI на ветке `suite-v1` (2026-10-20)
+
+**Тесты.** Зелёные Linux x86_64 и arm64 (GCC), переносимая арифметика,
+Windows x86_64 (MSVC) и macOS arm64. На каждой платформе проходят ctest 22/22
+и `verify`. Плюс шаги `run --quick --cpu --json` и `check-jsonschema`.
+
+**GPU-паритет в CI.**
+- Linux и Windows: lavapipe, оба варианта u64, 19/19 PASS.
+- macOS 26: паравиртуальный GPU через MoltenVK из релизной раскладки.
+- Сборка CUDA (nvcc 12.8) компилируется. Запуск CUDA на GPU в CI невозможен:
+  NVIDIA нет.
+
+**Релизы** (`workflow_dispatch`, без тега): собраны 4 архива, каждый прошёл
+смоук.
+- Windows x86_64 и Linux x86_64 — CUDA + Vulkan.
+- Linux arm64 — Vulkan.
+- macOS arm64 — Vulkan, `libMoltenVK.dylib` рядом с бинарём.
+
+**Найдено по пути:**
+- Имя ICD lavapipe в новом Mesa — `lvp_icd.json`. Раньше CI указывал на
+  несуществующий файл, и GPU-проверки молча пропускались. Теперь
+  `MONKEY_REQUIRE_VULKAN=1` делает пропуск ошибкой.
+- Windows-runner работает с повышенными правами, и loader там игнорирует
+  `VK_DRIVER_FILES`. ICD регистрируется в реестре.
+- На образе macos-14 драйвер паравиртуального GPU падает в Metal при
+  инициализации MoltenVK. Смоук релиза на нём идёт с
+  `MONKEY_DISABLE_VULKAN=1`, а GPU-путь той же раскладки проверяется на
+  macOS 26.
+- Падение `test_engine` на 3-ядерной виртуалке: проверка участия обоих
+  устройств была зависима от планировщика. Она вынесена на длинное задание.
+
+**Не сделано.**
+- Пуш в master, теги и релиз на GitHub — ждут вашего решения.
+- Прогон `monkey_bench verify` на машине с NVIDIA.
