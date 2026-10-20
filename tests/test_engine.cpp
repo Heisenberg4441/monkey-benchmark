@@ -101,11 +101,30 @@ TEST_CASE("CPU and GPU share one dispatcher without duplicates", "[engine]") {
     REQUIRE(r.error.empty());
     REQUIRE(r.res == ref);
     REQUIRE(r.cpu_units + r.gpu_units == N);
-    REQUIRE(r.gpu_units > 0);
-    REQUIRE(r.cpu_units > 0);
     std::vector<uint64_t> got = r.bbp_acc;
     got.resize(kp.bbp.positions);
     REQUIRE(got == ref_acc);
+}
+
+TEST_CASE("both CPU and GPU take chunks of a long job", "[engine]") {
+    // Задание на сотни миллисекунд: поток GPU успевает включиться даже на
+    // 3-ядерной виртуалке CI (на коротком задании CPU-воркеры могли выбрать всё).
+    const KernelParams kp = random_fox();
+    const uint64_t N = 40000000;
+    FakeGpu gpu;
+    Engine e(2, &gpu);
+    e.plan.cpu = 1u << 16;
+    e.plan.gpu = 1u << 16;
+    JobSpec s;
+    s.kp = &kp;
+    s.end = N;
+    s.use_gpu = true;
+    const JobResult r = e.run(s);
+    REQUIRE(r.completed);
+    REQUIRE(r.cpu_units + r.gpu_units == N);
+    REQUIRE(r.gpu_units > 0);
+    REQUIRE(r.cpu_units > 0);
+    REQUIRE(r.res == cpu_run_range(kp, 0, N, nullptr));
 }
 
 TEST_CASE("time limit stops a job within about one chunk", "[engine]") {

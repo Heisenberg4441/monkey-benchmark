@@ -90,6 +90,19 @@ jobs:
       - name: Verify kernels on every backend
         run: ./build/monkey_bench verify --vk-allow-cpu
 
+      # Раскладка релизного архива macOS: MoltenVK рядом с бинарём, без loader'а.
+      - name: Release layout with bundled MoltenVK (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MVK_CONFIG_LOG_LEVEL: 3
+        run: |
+          mkdir -p dist
+          cp build/monkey_bench dist/
+          cp "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" dist/
+          cd dist
+          ./monkey_bench info
+          ./monkey_bench verify
+
       # Полный suite на программном GPU шёл бы часами: CPU-категории + verify.
       - name: Quick suite (CPU) with JSON report
         run: ./build/monkey_bench run --quick --cpu --json bench.json

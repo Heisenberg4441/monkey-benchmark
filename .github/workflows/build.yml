@@ -119,6 +119,8 @@ jobs:
       # GPU, ядра этой сборки совпадают с golden.
       - name: Smoke test packaged binary
         shell: bash
+        env:
+          MVK_CONFIG_LOG_LEVEL: 3 # предупреждения и ошибки MoltenVK в лог
         run: |
           cd dist
           ./monkey_bench --version
