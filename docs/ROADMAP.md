@@ -18,7 +18,7 @@
 - Чистая сборка `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release` (CPU + Vulkan),
   ctest 9/9 зелёный.
 - Эталон для monkey — `The quick brown fox jumps over the lazy dog`
-  (n=27, len=43), без перевода строки.
+  (n=28, len=43; в постановке ошибочно n=27), без перевода строки.
 - Точечные пробы — одноразовые C++-программы поверх `src/` и
   `libmonkey_workloads.a` (в репозиторий не входят): маппинг кандидатов,
   checksum BBP, MR против решета Эратосфена, побитовый mulmod, BBP на d≈10⁶.
@@ -32,7 +32,7 @@
 | # | Дефект | Где | Воспроизведение → результат | Статус |
 |---|---|---|---|---|
 | 1 | GPU игнорирует `--workload` | `cuda_backend.cu:113`, `vulkan_backend.cpp:171` | `-gpu -w miller-rabin -d 3` → `"workload": "miller-rabin"`, `total_attempts = 17179869184` = 4 × 2³² — ровно столько же, сколько у `-gpu -w monkey`. CPU-MR за то же время: 172 M | ✅ Vulkan; CUDA — по коду |
-| 2 | Разный маппинг counter → кандидат | `monkey_kernel.h:23`, `cuda_backend.cu:41,48`, `monkey.comp:31,36` | Проба: CPU counter=0 → `26 2 13 25 …`, GPU tid=0 k=0 → `26 8 11 16 …`. Теста на одинаковость кандидатов нет | ✅ |
+| 2 | Разный маппинг counter → кандидат | `monkey_kernel.h:23`, `cuda_backend.cu:41,48`, `monkey.comp:31,36` | Проба (n=27): CPU counter=0 → `26 2 13 25 …`, GPU tid=0 k=0 → `26 8 11 16 …`. Теста на одинаковость кандидатов нет | ✅ |
 | 2a | Пересечение потоков между диспатчами | `cuda_backend.cu:161`, `vulkan_backend.cpp:368` | Vulkan: `seed_d(t) = s + d·2¹⁹ + t·G mod 2³²`. На диспатче **8192** поток 0 получает seed потока диспатча 0 — полный повтор потока (~2.3 ч при диспатче ~1 с) | ✅ (расчёт) |
 | 3 | Vulkan brute — 32-битный индекс | `monkey.comp:45`, `vulkan_backend.cpp:30,369` | `jihgfedcba` (код 9 876 543 210 > 2³²), `-gpu -m brute -d 10` → `solution_found: false`, «попыток» 90 G. Хуже, чем в описании: при batch 8192 шаг `pc.base += 524288·8192 = 2³² ≡ 0`, т.е. **каждый диспатч перебирает тот же [0, 2³²)** | ✅ |
 | 4 | Vulkan завышает число попыток | `vulkan_backend.cpp:359` | `ba` (код 2): GPU → `total_attempts = 4294967296`, CPU → `3` | ✅ |
@@ -62,7 +62,7 @@
 | N2 | **Переносимый `Counter` (MSVC/CUDA) неверно умножает.** `operator*(Counter, uint64_t)` берёт только младшие 32 бита множителя и ошибается при `a.hi ≠ 0` | `uint128.h:60–75` | Сборка с `-U__SIZEOF_INT128__`: `test_uint128` — 4 проваленных assert'а; brute на 128-битном пространстве не проходит `verify()`. На clang/gcc этот путь никогда не тестируется |
 | N3 | **CI на master красный:** Windows, шаг Smoke bench, exit 139 (падение процесса) | `tests.yml` | run 28227748745. Логи истекли (HTTP 410), на macOS не воспроизводится. Причину ищу в фазе 4, на новом движке |
 | N4 | Vulkan-бэкенд отбрасывает CPU-устройства (`score 0`) → на lavapipe в CI `vulkan_available() == false`, бенч молча уходит на CPU. Боевой Vulkan-путь в CI не исполняется ни разу | `vulkan_backend.cpp:74–81` | По коду; `test_vulkan_philox` берёт `devs[0]` без фильтра, поэтому он работает |
-| N5 | brute на каноничной строке fox невозможен: 27⁴³ ≈ 2²⁰⁴ > 2¹²⁸ | `workload_monkey.cpp:17–25` | `fox.txt -m brute` → `verify() workload'а 'monkey' не прошёл` |
+| N5 | brute на каноничной строке fox невозможен: 28⁴³ ≈ 2²⁰⁷ > 2¹²⁸ | `workload_monkey.cpp:17–25` | `fox.txt -m brute` → `verify() workload'а 'monkey' не прошёл` |
 | N6 | Флаг `found` на GPU читается без синхронизации: в шейдере — неатомарное чтение в цикле, на хосте нет барьера SHADER_WRITE → HOST_READ; в CUDA — не-volatile `*found` | `monkey.comp:33,44`, `vulkan_backend.cpp:357–362`, `cuda_backend.cu:45,80` | По коду/спецификации Vulkan. Ранний выход не гарантирован |
 | N7 | Явно запрошенный, но недоступный GPU (`--gpu-api cuda`) — тихий откат на CPU с `[warn]` | `main.cpp:357–370` | По коду. Нарушает критерий 4 («явная ошибка») |
 | N8 | `MonkeyWorkload` вообще не пишет checksum — результат monkey не проверяется ничем | `workload_monkey.cpp:31–66` | По коду |

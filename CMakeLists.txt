@@ -31,8 +31,9 @@ option(MONKEY_PORTABLE_ARITH "Переносимые 32-битные пути а
 find_package(Threads REQUIRED)
 
 # --- Workloads (что считает бенч) ------------------------------------------
-# Статическая библиотека, общая для бинаря и тестов: реализации IWorkload и
-# header-only ядра (__host__ __device__) в src/workloads/.
+# Статическая библиотека, общая для бинаря и тестов: описание kernel'ов и
+# эталонный CPU-исполнитель (kernels.cpp) поверх header-only ядер
+# (__host__ __device__) в src/workloads/.
 # Эталонные цифры π встраиваются в бинарь: BBP проверяется независимо от CWD.
 set(PI_HEX_HEADER ${CMAKE_BINARY_DIR}/gen/pi_hex_data.h)
 add_custom_command(
@@ -44,9 +45,7 @@ add_custom_command(
     VERBATIM)
 
 add_library(monkey_workloads STATIC
-    src/workload.cpp
-    src/workload_monkey.cpp
-    src/workload_extra.cpp
+    src/kernels.cpp
     src/pi_digits.cpp
     ${PI_HEX_HEADER})
 target_include_directories(monkey_workloads PUBLIC src PRIVATE ${CMAKE_BINARY_DIR}/gen)

@@ -1,5 +1,5 @@
 #include "backend.h"
-#include "workload.h"
+#include "kernels.h"
 
 #include <algorithm>
 #include <chrono>
@@ -177,6 +177,14 @@ bool parse_args(int argc, char** argv, Args& args) {
 }
 
 const char* mode_name(Mode m) { return m == Mode::Random ? "random" : "brute"; }
+const char* workload_name(WorkloadType t) {
+    switch (t) {
+    case WorkloadType::Monkey: return "monkey";
+    case WorkloadType::Bbp: return "bbp";
+    case WorkloadType::MillerRabin: return "miller-rabin";
+    }
+    return "unknown";
+}
 const char* backend_name(Backend b) {
     return b == Backend::Cpu ? "cpu" : (b == Backend::Gpu ? "gpu" : "all");
 }
@@ -334,17 +342,49 @@ int run(int argc, char** argv) {
     cfg.batch_size = args.batch_size;
     cfg.workload = args.workload;
 
-    {
-        auto wl = make_workload(cfg);
-        if (!wl) {
-            std::cerr << "Ошибка: workload '" << workload_name(cfg.workload)
-                      << "' ещё не реализован\n";
-            return 1;
+    // Что исполняют бэкенды. BBP и MR — фиксированные окна suite (стоимость
+    // операции не растёт со временем прогона), monkey — эталон из файла.
+    KernelParams& kp = cfg.kernel;
+    switch (cfg.workload) {
+    case WorkloadType::Monkey:
+        kp.kernel = (cfg.mode == Mode::Brute) ? KernelId::MonkeyBrute : KernelId::MonkeyRandom;
+        kp.seed = cfg.seed;
+        kp.n = static_cast<uint32_t>(cfg.n);
+        kp.target.assign(cfg.target_idx.begin(), cfg.target_idx.end());
+        break;
+    case WorkloadType::Bbp:
+        kp.kernel = KernelId::Bbp;
+        kp.bbp = bbp_window(1024);
+        break;
+    case WorkloadType::MillerRabin:
+        kp.kernel = KernelId::MillerRabin;
+        kp.mr_base = (1ull << 62) + 1;
+        kp.mr_step = 2;
+        break;
+    }
+    if (kp.kernel == KernelId::MonkeyBrute) {
+        // Индекс 64-битный: эталон с кодом >= 2^64 недостижим перебором. С -d это
+        // просто замер скорости перебора, без -d — бесконечный поиск, ошибка.
+        uint64_t code = 0;
+        for (int32_t t : kp.target) {
+            if (code > (UINT64_MAX - static_cast<uint64_t>(t)) / kp.n) {
+                if (cfg.duration <= 0) {
+                    std::cerr << "Ошибка: brute — код эталона не помещается в 64 бита "
+                                 "(n^len > 2^64), совпадение недостижимо; задайте -d или "
+                                 "используйте random\n";
+                    return 1;
+                }
+                std::cerr << "[warn] brute: n^len > 2^64, совпадение недостижимо — только замер\n";
+                break;
+            }
+            code = code * kp.n + static_cast<uint64_t>(t);
         }
-        wl->prepare(cfg);
-        if (!wl->verify()) {
-            std::cerr << "Ошибка: verify() workload'а '" << wl->name()
-                      << "' не прошёл — бенч не запущен\n";
+    }
+    {
+        std::string why;
+        if (!kernel_selfcheck(kp, &why)) {
+            std::cerr << "Ошибка: самопроверка ядра '" << kernel_name(kp.kernel)
+                      << "' не прошла (" << why << ") — бенч не запущен\n";
             return 1;
         }
     }

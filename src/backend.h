@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "counters.h"
+#include "kernels.h"
 
 namespace monkey {
 
@@ -28,6 +29,7 @@ struct Config {
     uint32_t seed = 0x9e3779b9u;         // seed counter-based PRNG (CLI --seed)
     uint64_t batch_size = 8192;          // гранулярность синка счётчика (CLI --batch-size)
     WorkloadType workload = WorkloadType::Monkey; // что считаем (CLI --workload)
+    KernelParams kernel;                 // что именно исполняют бэкенды (kernels.h)
 };
 
 // Общее состояние, разделяемое между бэкендами и репортером.

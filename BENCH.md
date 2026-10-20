@@ -191,3 +191,29 @@ Accuracy: 8 hex digits per position match `reference/pi_hex.txt` for
 positions 0–2047 and at both ends of the suite window near 10^6 (`test_bbp`).
 The digits are now embedded in the binary, so BBP no longer depends on the
 current directory.
+
+## Monkey: canonical counter → candidate mapping
+
+`IWorkload` and the 128-bit `Counter` are replaced by `KernelParams` +
+`cpu_run_range()` (`src/kernels.h`). The CPU's Philox mapping
+(`ctr = {pos, i_lo, i_hi, 0}`, `key = {seed, 0}`) is now the canon that every
+backend implements. The per-index result is the matched prefix (random) or
+suffix (brute) length, and it goes into the order-independent checksum
+together with `count` and `hits`. Brute is a 64-bit index in base n padded
+to `len` digits, so the fox string (n = 28, len = 43, 28^43 > 2^128) can be
+enumerated now; before, it failed `verify()`.
+
+Old timed engine, fox string, `-d 4`, same machine:
+
+| Mode | before (`61bc279`) | after |
+| --- | --- | --- |
+| random, 1 thread | 131 M/s | 159 M/s |
+| random, 14 threads | 1.28 G/s | 1.52 G/s |
+| brute, 1 thread | did not run | 1.78 G/s |
+| brute, 14 threads | did not run | 16.6 G/s |
+
+The random gain (+21 %) recovers the Phase-3 regression documented above
+(151 → 127 M/s when the virtual `IWorkload` path was introduced). The kernel
+is now a plain loop over `monkey_random_prefix`, and the call is no longer
+virtual. Brute costs ~1.04 64-bit divisions per candidate. M4 Pro pipelines
+independent `udiv`s, so it runs at ~0.56 ns per candidate on one core.
