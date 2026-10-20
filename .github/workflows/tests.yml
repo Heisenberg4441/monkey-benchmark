@@ -18,14 +18,11 @@ jobs:
           # исполняют настоящий SPIR-V.
           - name: Linux x64 (GCC, lavapipe)
             os: ubuntu-latest
-            icd: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           - name: Linux arm64 (GCC, lavapipe)
             os: ubuntu-24.04-arm
-            icd: /usr/share/vulkan/icd.d/lvp_icd.aarch64.json
           # Тот же код без __int128 и интринсиков — пути, которыми идут MSVC и GLSL.
           - name: Linux x64 (portable arithmetic)
             os: ubuntu-latest
-            icd: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
             cmake_extra: -DMONKEY_PORTABLE_ARITH=ON
           - name: Windows x64 (MSVC, Vulkan SDK)
             os: windows-latest
@@ -40,9 +37,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan-dev glslang-tools mesa-vulkan-drivers vulkan-tools ninja-build
-          ls /usr/share/vulkan/icd.d/
-          echo "VK_ICD_FILENAMES=${{ matrix.icd }}" >> "$GITHUB_ENV"
-          echo "VK_DRIVER_FILES=${{ matrix.icd }}" >> "$GITHUB_ENV"
+          # Имя ICD lavapipe зависит от версии Mesa: lvp_icd.json или
+          # lvp_icd.<arch>.json — ищем по маске, а не по жёсткому пути.
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          test -n "$icd"
+          echo "lavapipe ICD: $icd"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
           echo "MONKEY_REQUIRE_VULKAN=1" >> "$GITHUB_ENV"
 
       - name: Install Vulkan SDK (macOS)
@@ -72,9 +73,14 @@ jobs:
           $asset = $rel.assets | Where-Object { $_.name -match 'release-msvc\.7z$' } | Select-Object -First 1
           Invoke-WebRequest $asset.browser_download_url -OutFile mesa.7z
           7z x mesa.7z -omesa | Out-Null
-          $icd = (Resolve-Path mesa\x64\lvp_icd.x86_64.json).Path
-          "VK_DRIVER_FILES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "VK_ICD_FILENAMES=$icd" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $icd = (Get-ChildItem mesa\x64\lvp_icd*.json | Select-Object -First 1).FullName
+          Write-Host "lavapipe ICD: $icd"
+          # Runner работает с правами администратора, а loader в этом случае
+          # игнорирует VK_DRIVER_FILES: регистрируем ICD в реестре, как драйвер.
+          $key = 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name $icd -PropertyType DWord -Value 0 -Force | Out-Null
+          "MONKEY_REQUIRE_VULKAN=1" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure
         run: >
