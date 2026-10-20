@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include <vulkan/vulkan.h>
+#include "vulkan_loader.h"
 
 // SPIR-V src/shaders/kernels.comp в двух вариантах (генерирует CMake):
 // kernels_native_spv — uint64_t (shaderInt64), kernels_emu_spv — uvec2.
@@ -19,6 +19,8 @@
 // явному разрешению (тесты, CI).
 
 namespace monkey {
+
+using namespace vkl; // функции Vulkan — указатели, загруженные в рантайме
 
 namespace {
 
@@ -54,9 +56,14 @@ bool has_extension(const std::vector<VkExtensionProperties>& exts, const char* n
 }
 
 // Instance с portability enumeration (нужно MoltenVK начиная с loader 1.3.216).
-VkInstance create_instance() {
+// Vulkan загружается в рантайме: без него — nullptr и понятная причина в *err.
+VkInstance create_instance(std::string* err) {
+    if (!load_library(err)) return VK_NULL_HANDLE;
     uint32_t n = 0;
-    if (vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr) != VK_SUCCESS) return VK_NULL_HANDLE;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr) != VK_SUCCESS) {
+        if (err) *err = "vulkan: cannot enumerate instance extensions";
+        return VK_NULL_HANDLE;
+    }
     std::vector<VkExtensionProperties> exts(n);
     vkEnumerateInstanceExtensionProperties(nullptr, &n, exts.data());
 
@@ -72,7 +79,7 @@ VkInstance create_instance() {
     // 1.2, если loader умеет: иначе MoltenVK сообщает устройство как 1.1 и не
     // отдаёт VkPhysicalDeviceDriverProperties (имя и версию драйвера).
     uint32_t loader = VK_API_VERSION_1_0;
-    if (vkEnumerateInstanceVersion(&loader) != VK_SUCCESS) loader = VK_API_VERSION_1_0;
+    if (!vkEnumerateInstanceVersion || vkEnumerateInstanceVersion(&loader) != VK_SUCCESS) loader = VK_API_VERSION_1_0;
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "monkey_bench";
@@ -85,7 +92,12 @@ VkInstance create_instance() {
     ci.enabledExtensionCount = static_cast<uint32_t>(enabled.size());
     ci.ppEnabledExtensionNames = enabled.data();
     VkInstance inst = VK_NULL_HANDLE;
-    if (vkCreateInstance(&ci, nullptr, &inst) != VK_SUCCESS) return VK_NULL_HANDLE;
+    const VkResult r = vkCreateInstance(&ci, nullptr, &inst);
+    if (r != VK_SUCCESS) {
+        if (err) *err = "vulkan: vkCreateInstance failed (VkResult " + std::to_string(r) + ")";
+        return VK_NULL_HANDLE;
+    }
+    if (!load_instance(inst, err)) return VK_NULL_HANDLE;
     return inst;
 }
 
@@ -189,8 +201,9 @@ private:
 
 void VulkanDevice::init() {
     const auto t0 = std::chrono::steady_clock::now();
-    inst_ = create_instance();
-    if (!inst_) throw GpuError("vulkan: no Vulkan loader or instance creation failed");
+    std::string err;
+    inst_ = create_instance(&err);
+    if (!inst_) throw GpuError(err);
 
     // Выбор устройства: явный индекс или лучший тип; CPU-реализации — только
     // если разрешены.
@@ -230,7 +243,7 @@ void VulkanDevice::init() {
                       props.driverVersion);
         info_.driver = buf;
     }
-    if (props.apiVersion >= VK_API_VERSION_1_2) {
+    if (props.apiVersion >= VK_API_VERSION_1_2 && vkGetPhysicalDeviceProperties2) {
         VkPhysicalDeviceDriverProperties drv{};
         drv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
         VkPhysicalDeviceProperties2 p2{};
@@ -532,6 +545,8 @@ void VulkanDevice::destroy() {
 
 bool vulkan_compiled() { return true; }
 
+std::string vulkan_runtime() { return library_name(); }
+
 std::unique_ptr<GpuDevice> create_vulkan_device(const VulkanOptions& opt, std::string* err) {
     auto d = std::make_unique<VulkanDevice>(opt);
     try {
@@ -545,8 +560,12 @@ std::unique_ptr<GpuDevice> create_vulkan_device(const VulkanOptions& opt, std::s
 
 std::vector<std::string> list_vulkan_devices() {
     std::vector<std::string> out;
-    VkInstance inst = create_instance();
-    if (!inst) return out;
+    std::string err;
+    VkInstance inst = create_instance(&err);
+    if (!inst) {
+        out.push_back(err);
+        return out;
+    }
     for (VkPhysicalDevice d : physical_devices(inst)) {
         VkPhysicalDeviceProperties p{};
         vkGetPhysicalDeviceProperties(d, &p);

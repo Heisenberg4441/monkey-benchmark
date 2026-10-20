@@ -13,4 +13,6 @@ std::unique_ptr<GpuDevice> create_vulkan_device(const VulkanOptions&, std::strin
 
 std::vector<std::string> list_vulkan_devices() { return {}; }
 
+std::string vulkan_runtime() { return {}; }
+
 } // namespace monkey

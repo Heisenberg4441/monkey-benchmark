@@ -64,6 +64,8 @@ bool vulkan_compiled();
 std::unique_ptr<GpuDevice> create_vulkan_device(const VulkanOptions& opt, std::string* err);
 // Имена всех Vulkan-устройств (для `info`).
 std::vector<std::string> list_vulkan_devices();
+// Загруженная библиотека Vulkan (пусто, если не найдена или не загружалась).
+std::string vulkan_runtime();
 
 struct CudaOptions {
     int device_index = 0;

@@ -491,7 +491,9 @@ int cmd_info(const std::vector<std::string>& args) {
               << "System:  " << si.os << " " << si.os_version << " (kernel " << si.kernel << "), " << si.arch << "\n"
               << "CPU:     " << describe_cpu(si) << ", " << si.cores_physical << " physical cores\n";
     std::cout << "Vulkan:  " << (vulkan_compiled() ? "built in" : "not built in");
-    for (const auto& d : list_vulkan_devices()) std::cout << "\n         " << d;
+    const auto vk_devices = list_vulkan_devices();
+    if (!vulkan_runtime().empty()) std::cout << " (runtime " << vulkan_runtime() << ")";
+    for (const auto& d : vk_devices) std::cout << "\n         " << d;
     std::cout << "\nCUDA:    " << (cuda_compiled() ? "built in" : "not built in");
     for (const auto& d : list_cuda_devices()) std::cout << "\n         " << d;
     std::cout << "\n";
