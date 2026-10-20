@@ -46,7 +46,9 @@ constexpr int kRunsQuick = 1;
 constexpr double kWarmupStandard = 2.0; // с, на каждый тест и категорию
 constexpr double kWarmupQuick = 1.0;
 
-// Эталонная машина (балл 1000).
+// Эталонная машина (балл 1000). t_ref — медиана 5 прогонов `run --standard`
+// (простой, питание от сети, режим высокой мощности, пауза 2 мин между
+// прогонами), см. BENCH.md.
 constexpr char kReferenceMachine[] = "Apple M4 Pro (10P+4E), macOS 27.0, MoltenVK 1.4.2";
 
 // clang-format off
@@ -54,22 +56,22 @@ constexpr TestDef kTests[] = {
     {"monkey-random", "Philox4x32-10 candidates for the fox pangram, matched prefix length",
      KernelId::MonkeyRandom,
      {800000000ull, 7600000000ull, 24000000000ull},
-     {0, 0, 0},
+     {5.253, 4.927, 4.913},
      {{0x803d74d51ae9cd93ull, 28568179ull}, {0xf31ceddec4340ad2ull, 271441309ull}, {0xa5c39389a94098deull, 857177473ull}}},
     {"monkey-brute", "base-28 enumeration of the fox pangram, matched suffix length",
      KernelId::MonkeyBrute,
      {8600000000ull, 84000000000ull, 52000000000ull},
-     {0, 0, 0},
+     {4.883, 4.981, 4.978},
      {{0x53c7c613cdd22e99ull, 307142857ull}, {0xa2c022813043deffull, 3000000000ull}, {0x58de71628b47c298ull, 1857142857ull}}},
     {"bbp-pi", "hex digits of pi near position 10^6, integer BBP, blocks of 256 terms",
      KernelId::Bbp,
      {46ull, 480ull, 2600ull},
-     {0, 0, 0},
+     {4.710, 4.835, 4.894},
      {{0x33602ed7ab8ad5f0ull, 179722ull}, {0xa320c9765d929053ull, 1874768ull}, {0x72c2f4b19147ebf2ull, 10144280ull}}},
     {"mr-prime64", "deterministic Miller-Rabin over odd numbers above 2^62",
      KernelId::MillerRabin,
      {19000000ull, 185000000ull, 490000000ull},
-     {0, 0, 0},
+     {5.022, 4.944, 5.366},
      {{0xc6f105a011137f99ull, 884708ull}, {0x49b5965daa73e04full, 8608581ull}, {0x874790c631d99c1dull, 22801370ull}}},
 };
 // clang-format on

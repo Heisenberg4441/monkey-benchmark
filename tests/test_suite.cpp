@@ -19,7 +19,7 @@ TEST_CASE("suite constants are complete and consistent", "[suite]") {
         for (int c = 0; c < kCategories; ++c) {
             const auto cat = static_cast<Category>(c);
             REQUIRE(t.size[c] > 0);
-            REQUIRE(t.t_ref[c] >= 0); // 0 — suite ещё не откалиброван: баллов нет
+            REQUIRE(t.t_ref[c] > 0);
             REQUIRE(t.golden[c].hits > 0);
             const KernelParams kp = make_params(t, cat);
             std::string why;

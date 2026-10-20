@@ -277,3 +277,43 @@ conversion to Montgomery form through the same multiply slot. That gives
 (~90 multiply steps per number) is per-number setup (`inv64`,
 `pow2_64_mod`), which some lane in a group needs on about every second
 step, and 64-bit multiplies built from 32-bit ones on Apple GPUs.
+
+## Suite v1 calibration and run-to-run stability
+
+Reference machine: Apple M4 Pro (10P + 4E), macOS 27.0, MoltenVK 1.4.2. The
+machine was idle, on AC power, in High Power Mode. `pmset -g therm` recorded
+no thermal or performance warnings during any run.
+
+**Protocol.** `t_ref` of every test and category is the median, over 5 runs,
+of the per-run medians of `monkey_bench run --standard`. Each run is 3 repeats
+after a 2 s warmup, with 2 min of idle time between runs. These are the
+"validation" runs below. The 3 earlier "calibration" runs, with only 30 s
+between them, serve as an independent check.
+
+Overall score of every run, scored with that `t_ref`:
+
+| Series | runs | CPU-ST | CPU-MT | GPU (Vulkan) | Overall |
+| --- | --- | --- | --- | --- | --- |
+| validation (120 s pause) | 1003.8, 989.9, 1000.6, 997.4, 1004.6 | CV 0.14 % | CV 0.06 % | CV 1.69 % | **CV 0.59 %** (range 1.47 %) |
+| calibration (30 s pause) | 999.6, 987.4, 989.1 | CV 2.20 % | CV 0.14 % | CV 0.46 % | **CV 0.66 %** (range 1.23 %) |
+
+Acceptance criterion 5 (CV of the overall score ≤ 3 % across runs on one
+machine) holds with a wide margin. Across all 8 runs the CV is 0.67 %.
+
+Inside one run the 3 repeats of a test agree within 0.0–0.5 % (the `±` in
+the score table). The spread between runs is larger, for two reasons:
+
+- **GPU Miller-Rabin heats up the chip.** It is the most power-hungry GPU
+  test (64-bit multiplies built from 32-bit ones) and the last one in the
+  suite. Its median varied 5.09–5.85 s across the validation runs (CV 5.7 %).
+  Six back-to-back `run --gpu --test mr-prime64 --quick` processes slowed down
+  monotonically: 5.10, 5.12, 5.22, 5.60, 5.56, 5.79 s. With 60 s of idle
+  between them they stayed at 5.09–5.24 s. This is sustained-load behavior of
+  the machine, not noise in the benchmark. The within-run `unstable` flag
+  does not catch it; `--stress` shows it as `throttle_ratio`.
+- **CPU-ST differs between processes on the same machine.** monkey-random on
+  one thread took 5.11 s in the first calibration run and 5.40–5.41 s in the
+  next two (30 s pauses). With 2 min pauses all 5 validation runs gave
+  5.24–5.29 s. A plausible cause is thermal state, or which P-core cluster
+  the single thread lands on. It was not isolated further, and the effect on
+  the overall score stays below 1.3 %.
