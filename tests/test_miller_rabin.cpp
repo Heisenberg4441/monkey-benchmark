@@ -81,3 +81,28 @@ TEST_CASE("Miller-Rabin matches a segmented sieve on large windows",
         REQUIRE(mismatches == 0);
     }
 }
+
+namespace {
+
+// Пошаговый автомат (вариант для GPU) до итога.
+bool lane_is_prime(uint64_t n) {
+    monkey::kernel::MrLane L{};
+    int r = monkey::kernel::mr_lane_start(L, n);
+    while (r == monkey::kernel::kMrContinue) r = monkey::kernel::mr_lane_step(L);
+    return r == monkey::kernel::kMrPrime;
+}
+
+} // namespace
+
+TEST_CASE("step-wise SIMT Miller-Rabin equals the scalar kernel", "[millerrabin][simt]") {
+    uint64_t mismatches = 0;
+    for (uint64_t n = 0; n < (1u << 18); ++n) mismatches += lane_is_prime(n) != miller_rabin_is_prime(n);
+    // d = 1 (n = 2^s + 1), сильные псевдопростые и края 64 бит.
+    for (uint64_t n : {5ull, 17ull, 257ull, 65537ull, 4294967297ull, 4033ull, 4681ull,
+                       3825123056546413051ull, 18446744073709551557ull, ~0ull, (1ull << 63) + 1})
+        mismatches += lane_is_prime(n) != miller_rabin_is_prime(n);
+    for (uint64_t lo : {1ull << 40, (1ull << 62) + 1, ~0ull - 200000}) {
+        for (uint64_t n = lo; n < lo + 100000; ++n) mismatches += lane_is_prime(n) != miller_rabin_is_prime(n);
+    }
+    REQUIRE(mismatches == 0);
+}

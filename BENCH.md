@@ -250,3 +250,30 @@ Honest notes:
   witnesses, so lanes that drew composites sit idle. A per-lane state
   machine that keeps all lanes busy is the next optimization (before the
   t_ref calibration, so scores stay comparable).
+
+## Miller-Rabin on SIMT: step-wise lane state machine
+
+`MrLane` (`miller_rabin_kernel.h`, mirrored in `kernels.comp`, used by the
+CUDA kernel) splits the test into steps of exactly one Montgomery multiply.
+A lane that finishes its number starts the next one right away, so lanes
+holding composites no longer wait for lanes holding primes. The CPU keeps
+the scalar `miller_rabin_is_prime`. `test_miller_rabin` checks that both give
+identical answers on ~560 k numbers including edge cases, and `test_parity`
+re-checks the GPU against the CPU.
+
+M4 Pro via MoltenVK, odd n above 2^62:
+
+| GPU variant | u64 native | u64 emulated |
+| --- | --- | --- |
+| scalar kernel per index (previous commit) | 39.7 M/s | 33.2 M/s |
+| state machine, multiply inside per-phase branches | 49.9 M/s | 41.6 M/s |
+| state machine, one unconditional multiply per step (shipped) | 66.7 M/s | 55.1 M/s |
+
+The middle row is the first attempt: each phase had its own multiply, and
+SIMT executed the branches one after another. The final version picks the
+second operand per phase and multiplies once. It also routes the witness's
+conversion to Montgomery form through the same multiply slot. That gives
+×1.68 over the scalar kernel. Most of the remaining gap to the ideal
+(~90 multiply steps per number) is per-number setup (`inv64`,
+`pow2_64_mod`), which some lane in a group needs on about every second
+step, and 64-bit multiplies built from 32-bit ones on Apple GPUs.

@@ -53,7 +53,31 @@ __global__ void range_kernel(DevParams p, const int32_t* __restrict__ target, ui
     const uint64_t gid = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
 
     unsigned long long cs = 0, hits = 0, cnt = 0, ff = ~0ull;
-    for (uint64_t st = 0; st < steps; ++st) {
+    if constexpr (K == 3) {
+        // Miller-Rabin — пошаговый автомат (MrLane): поток, закончивший число,
+        // сразу берёт следующее и не ждёт соседей по warp'у с простыми.
+        kernel::MrLane L{};
+        uint64_t st = 0, i = begin + gid;
+        bool busy = steps > 0 && gid < count;
+        int res = busy ? kernel::mr_lane_start(L, p.mr_base + p.mr_step * i) : kernel::kMrContinue;
+        while (busy) {
+            if (res == kernel::kMrContinue) res = kernel::mr_lane_step(L);
+            if (res != kernel::kMrContinue) {
+                ++cnt;
+                if (res == kernel::kMrPrime) {
+                    ++hits;
+                    cs += kernel::contrib(i, 1);
+                }
+                const uint64_t off = ++st * total + gid;
+                busy = st < steps && off < count;
+                if (busy) {
+                    i = begin + off;
+                    res = kernel::mr_lane_start(L, p.mr_base + p.mr_step * i);
+                }
+            }
+        }
+    }
+    for (uint64_t st = 0; K != 3 && st < steps; ++st) {
         const uint64_t off = st * total + gid;
         if (off >= count) break;
         const uint64_t i = begin + off;
@@ -69,8 +93,6 @@ __global__ void range_kernel(DevParams p, const int32_t* __restrict__ target, ui
         } else if constexpr (K == 2) {
             r = kernel::bbp_unit(p.bbp, i);
             atomicAdd(&bbp_acc[kernel::bbp_unit_position(p.bbp, i)], static_cast<unsigned long long>(r));
-        } else {
-            r = kernel::miller_rabin_is_prime(p.mr_base + p.mr_step * i) ? 1 : 0;
         }
         ++cnt;
         if (r != 0) {

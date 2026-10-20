@@ -109,63 +109,94 @@ U64 bbp_terms(uint d, uint k0, uint k1) {
     return sum;
 }
 
-// --- miller-rabin (workloads/miller_rabin_kernel.h) ---------------------------
+// --- miller-rabin: пошаговый автомат (workloads/miller_rabin_kernel.h, MrLane) ---
+// Каждый шаг — не больше одного mont-умножения; поток, закончивший число,
+// сразу берёт следующее, поэтому потоки SIMD-группы не ждут соседей с простыми.
 
-U64 mr_pow(U64 base, U64 e, U64 n, U64 ninv, U64 one) {
-    U64 r = one;
-    while (!u64_is_zero(e)) {
-        if ((u64_lo(e) & 1u) != 0u) r = mont64_mul(r, base, n, ninv);
-        e = u64_shr(e, 1u);
-        if (!u64_is_zero(e)) base = mont64_mul(base, base, n, ninv);
-    }
-    return r;
+struct MrLane {
+    U64 n, ninv, one, mone;
+    U64 d, x, base, r2;
+    int s, w, bit, phase;
+};
+
+const int kMrExp = 0, kMrMul = 1, kMrStrong = 2, kMrCheck = 3, kMrInit = 4;
+const int kMrContinue = 0, kMrPrime = 1, kMrComposite = 2;
+const uint kMrW[6] = uint[6](325u, 9375u, 28178u, 450775u, 9780504u, 1795265022u);
+
+void mr_lane_exp_begin(inout MrLane L) {
+    L.bit = 62 - int(u64_clz(L.d));
+    L.phase = L.bit < 0 ? kMrCheck : kMrExp;
 }
 
-U64 mr_pow2(U64 e, U64 n, U64 ninv, U64 one) {
-    U64 r = one;
-    for (int i = 63 - int(u64_clz(e)); i >= 0; --i) {
-        r = mont64_mul(r, r, n, ninv);
-        if (u64_bit(e, uint(i)) != 0u) r = addmod64(r, r, n);
-    }
-    return r;
-}
-
-bool mr_strong(U64 x, uint s, U64 n, U64 ninv, U64 one, U64 mone) {
-    if (u64_eq(x, one) || u64_eq(x, mone)) return true;
-    for (uint r = 1u; r < s; ++r) {
-        x = mont64_mul(x, x, n, ninv);
-        if (u64_eq(x, mone)) return true;
-        if (u64_eq(x, one)) return false;
-    }
-    return false;
-}
-
-bool miller_rabin_is_prime(U64 n) {
-    if (u64_lt(n, u64_from(2u))) return false;
-    if (u64_lt(n, u64_from(4u))) return true;
-    if ((u64_lo(n) & 1u) == 0u) return false;
-
-    U64 nm1 = u64_sub(n, u64_from(1u));
-    uint s = u64_ctz(nm1);
-    U64 d = u64_shr(nm1, s);
-    U64 ninv = inv64(n);
-    U64 one = pow2_64_mod(n);
-    U64 mone = u64_sub(n, one);
-
-    if (!mr_strong(mr_pow2(d, n, ninv, one), s, n, ninv, one, mone)) return false;
-
-    U64 r2 = one;
-    for (int i = 0; i < 64; ++i) r2 = addmod64(r2, r2, n);
-
-    const uint W[6] = uint[6](325u, 9375u, 28178u, 450775u, 9780504u, 1795265022u);
-    for (int w = 0; w < 6; ++w) {
+int mr_lane_witness(inout MrLane L, int w) {
+    for (; w < 7; ++w) {
+        L.w = w;
+        if (w == 0) {
+            L.x = addmod64(L.one, L.one, L.n);
+            mr_lane_exp_begin(L);
+            return kMrContinue;
+        }
+        if (w == 1) {
+            L.r2 = L.one;
+            for (int i = 0; i < 64; ++i) L.r2 = addmod64(L.r2, L.r2, L.n);
+        }
         // a mod n: при n >= 2^32 свидетель (< 2^32) уже меньше n.
-        uint a = (u64_hi(n) == 0u) ? W[w] % u64_lo(n) : W[w];
+        uint a = (u64_hi(L.n) == 0u) ? kMrW[w - 1] % u64_lo(L.n) : kMrW[w - 1];
         if (a == 0u) continue;
-        U64 am = mont64_mul(u64_from(a), r2, n, ninv);
-        if (!mr_strong(mr_pow(am, d, n, ninv, one), s, n, ninv, one, mone)) return false;
+        L.x = u64_from(a);
+        L.base = L.r2;
+        L.phase = kMrInit;
+        return kMrContinue;
     }
-    return true;
+    return kMrPrime;
+}
+
+int mr_lane_strong_begin(inout MrLane L) {
+    if (u64_eq(L.x, L.one) || u64_eq(L.x, L.mone)) return mr_lane_witness(L, L.w + 1);
+    L.bit = 1;
+    if (L.bit >= L.s) return kMrComposite;
+    L.phase = kMrStrong;
+    return kMrContinue;
+}
+
+int mr_lane_start(inout MrLane L, U64 n) {
+    if (u64_lt(n, u64_from(2u))) return kMrComposite;
+    if (u64_lt(n, u64_from(4u))) return kMrPrime;
+    if ((u64_lo(n) & 1u) == 0u) return kMrComposite;
+    U64 nm1 = u64_sub(n, u64_from(1u));
+    L.s = int(u64_ctz(nm1));
+    L.d = u64_shr(nm1, uint(L.s));
+    L.n = n;
+    L.ninv = inv64(n);
+    L.one = pow2_64_mod(n);
+    L.mone = u64_sub(n, L.one);
+    return mr_lane_witness(L, 0);
+}
+
+int mr_lane_step(inout MrLane L) {
+    if (L.phase == kMrCheck) return mr_lane_strong_begin(L);
+    U64 y = (L.phase == kMrMul || L.phase == kMrInit) ? L.base : L.x;
+    L.x = mont64_mul(L.x, y, L.n, L.ninv);
+    if (L.phase == kMrInit) {
+        L.base = L.x;
+        mr_lane_exp_begin(L);
+        return kMrContinue;
+    }
+    if (L.phase == kMrStrong) {
+        if (u64_eq(L.x, L.mone)) return mr_lane_witness(L, L.w + 1);
+        if (u64_eq(L.x, L.one)) return kMrComposite;
+        if (++L.bit >= L.s) return kMrComposite;
+        return kMrContinue;
+    }
+    if (L.phase == kMrExp && u64_bit(L.d, uint(L.bit)) != 0u) {
+        if (L.w != 0) {
+            L.phase = kMrMul;
+            return kMrContinue;
+        }
+        L.x = addmod64(L.x, L.x, L.n);
+    }
+    L.phase = kMrExp;
+    return --L.bit < 0 ? mr_lane_strong_begin(L) : kMrContinue;
 }
 
 // --- обход индексов и редукция ------------------------------------------------
@@ -188,7 +219,32 @@ void main() {
     U64 ff = u64(0xFFFFFFFFu, 0xFFFFFFFFu);
     uint hits = 0u, cnt = 0u;
 
-    for (uint st = 0u; st < pc.steps; ++st) {
+    if (KERNEL == 3u) {
+        // Свои индексы поток проходит по очереди, но не синхронно с соседями.
+        MrLane L;
+        uint st = 0u;
+        U64 i = u64_add(begin, u64_from(gid));
+        bool busy = pc.steps > 0u && u64_lt(u64_from(gid), count);
+        int res = busy ? mr_lane_start(L, u64_add(mr_base, u64_mul(mr_step, i))) : kMrContinue;
+        while (busy) {
+            if (res == kMrContinue) res = mr_lane_step(L);
+            if (res != kMrContinue) {
+                ++cnt;
+                if (res == kMrPrime) {
+                    ++hits;
+                    cs = u64_add(cs, contrib(i, u64_from(1u)));
+                }
+                ++st;
+                U64 off = u64_add(u64_mul32(st, total), u64_from(gid));
+                busy = st < pc.steps && u64_lt(off, count);
+                if (busy) {
+                    i = u64_add(begin, off);
+                    res = mr_lane_start(L, u64_add(mr_base, u64_mul(mr_step, i)));
+                }
+            }
+        }
+    }
+    for (uint st = 0u; KERNEL != 3u && st < pc.steps; ++st) {
         U64 off = u64_add(u64_mul32(st, total), u64_from(gid));
         if (!u64_lt(off, count)) break;
         U64 i = u64_add(begin, off);
@@ -210,8 +266,7 @@ void main() {
             uint old = atomicAdd(bbp_acc[2u * w], lo);
             atomicAdd(bbp_acc[2u * w + 1u], hi + (old + lo < old ? 1u : 0u));
         } else {
-            r = miller_rabin_is_prime(u64_add(mr_base, u64_mul(mr_step, i))) ? u64_from(1u)
-                                                                             : u64(0u, 0u);
+            r = u64(0u, 0u); // KERNEL == 3 обрабатывается автоматом выше
         }
         ++cnt;
         if (!u64_is_zero(r)) {
